@@ -26,18 +26,13 @@
 ## INSTALLATION:
  
 **Windows:**
+
 -Install opencv :
-    ``
-    conda install -c conda-forge opencv
-    ``
+    `` conda install -c conda-forge opencv ``
 -Install pyqtgraph :
-    ``
-    conda install -c conda-forge pyqtgraph
-    ``
+    `` conda install -c conda-forge pyqtgraph ``
 -Install swig : 
-    ``
-    conda install -c anaconda swig
-    ``
+    ``  conda install -c anaconda swig  ``
 -Install MinGW 
 -Install visualStudio 2017 with:
       - "Developpement Desktop C++"
