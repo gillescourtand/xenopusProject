@@ -27,17 +27,17 @@
  
 **Windows:**
 -Install opencv :
-    '''
+    ``
     conda install -c conda-forge opencv
-    '''
+    ``
 -Install pyqtgraph :
-    '''
+    ``
     conda install -c conda-forge pyqtgraph
-    '''
+    ``
 -Install swig : 
-    '''
+    ``
     conda install -c anaconda swig
-    '''
+    ``
 -Install MinGW 
 -Install visualStudio 2017 with:
       - "Developpement Desktop C++"
@@ -45,21 +45,21 @@
     
 -Install pypylon :
     - from source
-           '''
+           ``
            git clone https://github.com/basler/pypylon.git
            cd pypylon
            pip install
-           '''
+           ``
     - from binary : download release pypylon-1.2.0.pylon5.0.12-cp36-cp36m-win_amd64.whl
-           '''
+           ``
            pip3 install ...
-           '''
+           ``
 
-## You're ready to run XenopuProject
+## You're ready to run XenopusProject
 
 
 <p align="center">
-<img src="/docs/capturescreen-rostro-caudal-66-60p.gif">
+<img src="/doc/capturescreen-rostro-caudal-66-60p.gif">
 </p>
 
 
