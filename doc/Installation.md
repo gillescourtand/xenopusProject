@@ -1,4 +1,4 @@
-# How To Use xenopusProject:
+# How To Install xenopusProject:
 
 ## First, Technical Considerations:
 
