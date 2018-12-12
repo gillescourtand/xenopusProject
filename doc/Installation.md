@@ -23,29 +23,41 @@
             
      
     
-## INSTALLATION:
+## Installation:
  
 **Windows:**
 
 -Install opencv :
+
     `` conda install -c conda-forge opencv ``
+    
 -Install pyqtgraph :
+
     `` conda install -c conda-forge pyqtgraph ``
--Install swig : 
+    
+-Install swig :
+
     ``  conda install -c anaconda swig  ``
--Install MinGW 
+    
+-Install MinGW
+
 -Install visualStudio 2017 with:
+
       - "Developpement Desktop C++"
+      
       - "Developpement Python, python native developpement tool"
     
 -Install pypylon :
     - from source
+    
            ``
            git clone https://github.com/basler/pypylon.git
            cd pypylon
            pip install
            ``
+           
     - from binary : download release pypylon-1.2.0.pylon5.0.12-cp36-cp36m-win_amd64.whl
+    
            ``
            pip3 install ...
            ``
