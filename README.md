@@ -13,5 +13,5 @@ new gui and module optostim
 <img src="/doc/Capture_GUI.JPG">
 </p>
 <p align="center">
-<img src="/doc/capture_GUI_optostim.JPG">
+<img src="/doc/Capture_GUI_optostim.JPG">
 </p>
