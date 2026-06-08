@@ -95,11 +95,13 @@ class SimpleFrameBuffer:
         #         }
         #         self.display_frames.append(display_frame)
     def get_frame_for_analysis(self):
-        """Récupérer UNE frame pour analyse (sans la supprimer pour éviter les problèmes)"""
+        """
+        Récupère les frames dans l'ordre FIFO.
+        Important pour analyser toutes les frames sans saut volontaire.
+        """
         with self.analysis_lock:
             if self.analysis_frames:
-                return self.analysis_frames[-1]  # Prendre la plus récente
-                # return self.analysis_frames.pop()
+                return self.analysis_frames.popleft()
             return None
     
     # def get_frame_for_display(self):
@@ -165,7 +167,10 @@ class FileVideoStreamLive(Thread):
         #---------------------------------------------------------------------
          
         # Buffer simple avec queues séparées
-        self.frame_buffer = SimpleFrameBuffer(analysis_maxsize=5, display_maxsize=2)
+        self.frame_buffer = SimpleFrameBuffer(
+            analysis_maxsize=queueSize,
+            display_maxsize=2
+        )
         
         # Queue simple pour affichage (backup)
         self.display_queue = queue.Queue(maxsize=5)
@@ -255,7 +260,7 @@ class FileVideoStreamLive(Thread):
                 grab_result.Release()
                 
                 # Pause minimale
-                time.sleep(0.001)
+                #time.sleep(0.001)
             
             except Exception as e:
                 print(f"Erreur acquisition: {e}")
@@ -711,6 +716,62 @@ class UIVideoCapture(pg.LayoutWidget):
         self.resultFPSValue_label.setNum(cam.ResultingFrameRate.GetValue())
         self.frameRate_text.setText(str(int(cam.AcquisitionFrameRate.GetValue())))
         
+    def stop_grabbing(self):
+        """
+        Arrêt propre et synchrone de l'acquisition caméra.
+        Important avant de modifier Width, Height, PixelFormat, etc.
+        """
+        try:
+            if self.videoDisplayer_updater is not None:
+                if hasattr(self.videoDisplayer_updater, "display_timer"):
+                    self.videoDisplayer_updater.display_timer.stop()
+        except Exception as e:
+            print("Erreur arrêt display_timer:", e)
+
+        try:
+            if self.acquisition_thread is not None:
+                self.acquisition_thread.stop()
+
+                if self.acquisition_thread.is_alive():
+                    self.acquisition_thread.join(timeout=2.0)
+
+                self.acquisition_thread = None
+        except Exception as e:
+            print("Erreur arrêt acquisition_thread:", e)
+
+        try:
+            if self.video.device is not None:
+                if self.video.device.IsGrabbing():
+                    self.video.device.StopGrabbing()
+        except Exception as e:
+            print("Erreur StopGrabbing caméra:", e)
+
+        time.sleep(0.05)
+        print("stop grabbing")
+
+        
+    def width_value_by_step(self):
+        self.cam_change()
+
+        value = self.frameWidth_slider.value()
+        self.frameWidthValue_label.setNum(value)
+
+        try:
+            if genicam.IsWritable(self.video.device.Width):
+                self.video.device.Width.SetValue(value)
+            else:
+                print("Width non modifiable actuellement : caméra encore active ou paramètre verrouillé")
+                return
+
+            self.resultFPSValue_label.setNum(self.video.device.ResultingFrameRate.GetValue())
+
+            self.offsetX_slider.setMaximum(self.video.device.OffsetX.Max)
+            self.offsetX_slider.setMinimum(self.video.device.OffsetX.Min)
+
+        except genicam.GenericException as e:
+            print("Erreur modification Width:", e)
+            QtWidgets.QMessageBox.warning(None, "Error", str(e), QtWidgets.QMessageBox.Ok)
+        
     #-----------------------------------------------------------------------
         
    
@@ -804,15 +865,35 @@ class UIVideoCapture(pg.LayoutWidget):
         else : 
             print("No camera found !")
                                             
-    
-
-    
     def start_stop_acquisition_toggle(self):
         if self.liveVideo_btn.isChecked()==True:
             self.start_acquisition()
         else:
             self.stop_acquisition()
-            # self.pause_acquisition()
+
+    
+    def stop_acquisition(self):
+
+        try:
+            if self.acquisition_thread:
+                self.acquisition_thread.stop()
+        except Exception as e:
+            print("Erreur arrêt acquisition_thread:", e)
+
+        try:
+            if self.videoDisplayer_updater is not None:
+                if hasattr(self.videoDisplayer_updater, "display_timer"):
+                    self.videoDisplayer_updater.display_timer.stop()
+        except Exception as e:
+            print("Erreur arrêt display_timer:", e)
+
+        try:
+            if self.video.device is not None and self.video.device.IsGrabbing():
+                self.video.device.StopGrabbing()
+        except Exception as e:
+            print("Erreur StopGrabbing:", e)
+
+        print("stop grabbing")
     
       
     
@@ -823,9 +904,10 @@ class UIVideoCapture(pg.LayoutWidget):
         """
         # lastTime_play=time.time()
         # measuredPlayfps=0
-        nbFramesBufferMax=1000
+        #☺nbFramesBufferMax=1000
         # Création et démarrage des threads
-        self.acquisition_thread = FileVideoStreamLive(self.video,nbFramesBufferMax)
+        nbFramesBufferMax = self.bufferSizeFrames_spinbox.value()
+        self.acquisition_thread = FileVideoStreamLive(self.video, nbFramesBufferMax)
         # self.analysis_thread = TadpoleAnalysis(self.acquisition_thread)
         
         # Démarrage des threads
@@ -833,15 +915,6 @@ class UIVideoCapture(pg.LayoutWidget):
 
         self.videoDisplayer_updater=Display(self,self.acquisition_thread,self.videoDisplayer,self.video)
         self.videoDisplayer_updater.setup_display_timer()
-
-                  
-    def stop_acquisition(self):
-       
-        if self.acquisition_thread:
-            self.acquisition_thread.stop()
-        self.videoDisplayer_updater.display_timer.stop()
-             
-        print("stop grabbing")
     
   
             

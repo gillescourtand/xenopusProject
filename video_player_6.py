@@ -19,6 +19,8 @@ v_3e : signal de déplacement du slider timeline
 2024
 v_4 : remplacement de Pyqtgraph.QtGui par pyQt5.QWidgets (mise à jour pyqtgraph 0.13, python 10)
 
+2025 :
+v_6 : affichage du temps en unité hh:mm:ss
 TODO : envoyer un signal en fin de video
 
 """
@@ -615,6 +617,7 @@ class UIVideoPlayer(pg.LayoutWidget):
         # self.availableMemValue_label.setText(str(round(svmem,2)))
         #calculer la taille du buffer en fonction du poids de chaque frame
         fshape=self.vid.currentFrame.shape
+        print("frame shape : ",fshape)
         #taille d'un frame en MB
         self.vid.frameWeight=fshape[0]*fshape[1]*fshape[2]/1024/1024
         print("frame size (MB) : ",self.vid.frameWeight)
@@ -972,13 +975,22 @@ class PyqtgWindow(QtWidgets.QMainWindow):
         self.setStyleSheet(qss)                   
         self.show()
 
+#def resource_path(relative_path):
+#    """ Get absolute path to resource, works for dev and for PyInstaller """
+#    if getattr(sys, 'frozen', False):  # Check if the app is frozen
+#        base_path = sys._MEIPASS
+#    else:
+#        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # Go up one level
+#    return os.path.join(base_path, relative_path) 
+
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
-    if getattr(sys, 'frozen', False):  # Check if the app is frozen
+    if getattr(sys, 'frozen', False):
         base_path = sys._MEIPASS
     else:
-        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))  # Go up one level
-    return os.path.join(base_path, relative_path) 
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    return os.path.join(base_path, relative_path)
 
 
 def clean_app():
@@ -1008,7 +1020,8 @@ if __name__ == '__main__':
     qss_path=resource_path('Imagys_blue')
     sys.path.append(qss_path)
     # importing
-    from qsshelper import QSSHelper
+    #from qsshelper import QSSHelper
+    from Imagys_blue.qsshelper import QSSHelper
     # qss = QSSHelper.open_qss('Imagys_blue\Imagys-blue.qss')
     app = QtWidgets.QApplication([])
     # app.setStyleSheet(qss)

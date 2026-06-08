@@ -263,6 +263,7 @@ class UIOptostim(pg.LayoutWidget):
             # self.stim_signal.emit(timestamp,self.stim_speed.value,self.stim_direction.value)
             timestamp= time.perf_counter()
             self.stim_results_list.append([timestamp,
+                                     self.stim_pattern.value,      
                                      self.stim_width.value,
                                      self.stim_spacing.value,
                                      self.stim_speed.value,
@@ -290,6 +291,7 @@ class UIOptostim(pg.LayoutWidget):
         
         timestamp= time.perf_counter()
         self.stim_results_list.append([timestamp,
+                                 self.stim_pattern.value,        
                                  self.stim_width.value,
                                  self.stim_spacing.value,
                                  self.stim_speed.value,
