@@ -4,15 +4,15 @@
 ExposureAuto	Off
 BalanceWhiteAuto	Off
 GainAuto	Off
-Width	896
-Height	542
+Width	1920
+Height	1200
 OffsetX	32
-OffsetY	258
+OffsetY	32
 CenterX	0
 CenterY	0
 ReverseX	0
 ReverseY	0
-PixelFormat	Mono8
+PixelFormat	BayerBG8
 TestImageSelector	Off
 Gain	{GainSelector=All}	0.00000
 GainSelector	All

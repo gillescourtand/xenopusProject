@@ -25,6 +25,61 @@ class AppController(object):
         self.pipeline = None
         self.display_worker = None
         self.last_overlay_frame_id = -1
+        
+    def _get_spinbox_value(self, widget, attribute_name, default_value):
+        """
+        Récupère la valeur d'un QSpinBox depuis l'interface.
+        Si le widget n'existe pas, on garde une valeur par défaut.
+        """
+        try:
+            spinbox = getattr(widget, attribute_name, None)
+
+            if spinbox is None:
+                return default_value
+
+            return int(spinbox.value())
+
+        except Exception:
+            return default_value
+        
+    def _get_spinbox_value(self, widget, attribute_name, default_value):
+        """
+        Récupère proprement la valeur d'un QSpinBox depuis l'interface.
+        Si le widget n'existe pas, on garde une valeur par défaut.
+        """
+        try:
+            spinbox = getattr(widget, attribute_name, None)
+
+            if spinbox is None:
+                return default_value
+
+            return int(spinbox.value())
+
+        except Exception:
+            return default_value
+        
+    def _set_buffer_controls_enabled(self, enabled):
+        """
+        Active ou désactive les réglages de buffers pendant le tracking.
+        Les tailles de buffers doivent être choisies avant le démarrage.
+        """
+        buffer_widget = getattr(self.ui, "video_capture_widget", None)
+
+        if buffer_widget is None:
+            return
+
+        names = [
+            "bufferSizeFrames_spinbox",
+            "trackingBufferFrames_spinbox",
+            "resultBufferFrames_spinbox",
+            "displayBufferFrames_spinbox",
+        ]
+
+        for name in names:
+            spinbox = getattr(buffer_widget, name, None)
+
+            if spinbox is not None:
+                spinbox.setEnabled(enabled)
 
     def start_tracking(self, result_file_path=None):
         if self.pipeline is not None and self.pipeline.running:
@@ -32,15 +87,55 @@ class AppController(object):
 
         result_file_path = result_file_path or self._default_result_file()
 
+        buffer_widget = getattr(self.ui, "video_capture_widget", None)
+
+        tracking_buffer_size = self._get_spinbox_value(
+            buffer_widget,
+            "trackingBufferFrames_spinbox",
+            500
+        )
+
+        result_buffer_size = self._get_spinbox_value(
+            buffer_widget,
+            "resultBufferFrames_spinbox",
+            500
+        )
+
+        display_buffer_size = self._get_spinbox_value(
+            buffer_widget,
+            "displayBufferFrames_spinbox",
+            5
+        )
+        
+        buffer_widget = getattr(self.ui, "video_capture_widget", None)
+
+        tracking_buffer_size = self._get_spinbox_value(
+            buffer_widget,
+            "trackingBufferFrames_spinbox",
+            500
+        )
+
+        result_buffer_size = self._get_spinbox_value(
+            buffer_widget,
+            "resultBufferFrames_spinbox",
+            500
+        )
+
+        display_buffer_size = self._get_spinbox_value(
+            buffer_widget,
+            "displayBufferFrames_spinbox",
+            5
+        )
+
         self.pipeline = RealtimePipeline(
             ui=self.ui,
             video=self.video,
             tracking_function=self.tracking_adapter,
             okr_provider=self,
             result_file_path=result_file_path,
-            frame_queue_size=500,
-            result_queue_size=500,
-            display_queue_size=5,
+            frame_queue_size=tracking_buffer_size,
+            result_queue_size=result_buffer_size,
+            display_queue_size=display_buffer_size,
         )
 
         self.display_worker = DisplayWorker(
@@ -53,6 +148,7 @@ class AppController(object):
         )
 
         self.pipeline.start()
+        self._set_buffer_controls_enabled(False)
         self.display_worker.start()
 
         print("Realtime pipeline started")
@@ -71,6 +167,7 @@ class AppController(object):
             except Exception:
                 pass
 
+        self._set_buffer_controls_enabled(True)
         print("Realtime pipeline stopped")
 
     def tracking_adapter(self, packet):

@@ -274,9 +274,14 @@ class FileVideoStreamLive(Thread):
         return self.frame_buffer.get_frame_for_analysis()
     
     def get_buffer_usage(self):
-        """Pourcentage d'utilisation du buffer"""
+        """Pourcentage d'utilisation du buffer caméra."""
         analysis_size = self.frame_buffer.get_analysis_buffer_size()
-        return (analysis_size / 50) * 100  # Sur 30 max
+        max_size = self.frame_buffer.analysis_frames.maxlen
+
+        if max_size is None or max_size == 0:
+            return 0
+
+        return (analysis_size / max_size) * 100
     
     def get_buffer_stats(self):
         """Statistiques détaillées"""
@@ -370,9 +375,12 @@ class UIVideoCapture(pg.LayoutWidget):
         self.availableMemValue_label.setMaximumWidth(100)
         self.availableMemValue_label.setMinimumWidth(40)
 
-        bufferSize_label= QtWidgets.QLabel("Buffer size (frames) ")
+        bufferSize_label = QtWidgets.QLabel("Camera buffer")
         bufferSize_label.setMinimumWidth(100)
         bufferSize_label.setMaximumWidth(120)
+        bufferSize_label.setToolTip(
+            "Camera buffer : nombre maximum de frames gardées côté acquisition caméra."
+        )
         self.bufferSizeValue_label= QtWidgets.QLabel("000")
         self.bufferSizeValue_label.setMinimumWidth(20)
         self.bufferSizeValue_label.setMaximumWidth(40)
@@ -388,7 +396,62 @@ class UIVideoCapture(pg.LayoutWidget):
         self.bufferSizeFrames_spinbox.setMaximum(2000)
         self.bufferSizeFrames_spinbox.setValue(10)
         self.bufferSizeFrames_spinbox.valueChanged.connect(self.bufferSizeMB_update)
+        self.bufferSizeFrames_spinbox.setToolTip(
+            "Nombre maximum de frames stockées dans le buffer caméra avant analyse."
+        )        
                 
+        pipelineBuffer_label = QtWidgets.QLabel("Pipeline buffers")
+        pipelineBuffer_label.setMinimumWidth(90)
+        pipelineBuffer_label.setMaximumWidth(95)
+
+        pipelineBuffer_help = QtWidgets.QLabel("?")
+        pipelineBuffer_help.setMinimumWidth(16)
+        pipelineBuffer_help.setMaximumWidth(16)
+        pipelineBuffer_help.setAlignment(QtCore.Qt.AlignCenter)
+        pipelineBuffer_help.setToolTip(
+            "Pipeline buffers:\n"
+            "T = Tracking buffer : frames en attente d'analyse.\n"
+            "R = Result buffer : résultats en attente d'écriture CSV.\n"
+            "D = Display buffer : éléments gardés pour l'affichage.\n\n"
+            "Ces valeurs sont utilisées au démarrage du tracking."
+        )
+
+        trackingBufferShort_label = QtWidgets.QLabel("T:")
+        trackingBufferShort_label.setToolTip("Tracking buffer : frames en attente d'analyse.")
+
+        self.trackingBufferFrames_spinbox = QtWidgets.QSpinBox()
+        self.trackingBufferFrames_spinbox.setMaximumWidth(60)
+        self.trackingBufferFrames_spinbox.setMinimum(1)
+        self.trackingBufferFrames_spinbox.setMaximum(5000)
+        self.trackingBufferFrames_spinbox.setValue(500)
+        self.trackingBufferFrames_spinbox.setToolTip(
+            "Nombre maximum de frames en attente de tracking."
+        )
+
+        resultBufferShort_label = QtWidgets.QLabel("R:")
+        resultBufferShort_label.setToolTip("Result buffer : résultats en attente d'écriture CSV.")
+
+        self.resultBufferFrames_spinbox = QtWidgets.QSpinBox()
+        self.resultBufferFrames_spinbox.setMaximumWidth(60)
+        self.resultBufferFrames_spinbox.setMinimum(1)
+        self.resultBufferFrames_spinbox.setMaximum(5000)
+        self.resultBufferFrames_spinbox.setValue(500)
+        self.resultBufferFrames_spinbox.setToolTip(
+            "Nombre maximum de résultats en attente d'écriture CSV."
+        )
+
+        displayBufferShort_label = QtWidgets.QLabel("D:")
+        displayBufferShort_label.setToolTip("Display buffer : données gardées pour l'affichage.")
+
+        self.displayBufferFrames_spinbox = QtWidgets.QSpinBox()
+        self.displayBufferFrames_spinbox.setMaximumWidth(50)
+        self.displayBufferFrames_spinbox.setMinimum(1)
+        self.displayBufferFrames_spinbox.setMaximum(100)
+        self.displayBufferFrames_spinbox.setValue(5)
+        self.displayBufferFrames_spinbox.setToolTip(
+            "Nombre maximum d'éléments gardés pour l'affichage."
+        )      
+        
         self.buffer_progress=QtWidgets.QProgressBar()
         self.buffer_progress.setMinimumWidth(100)
         self.buffer_progress.setMaximumWidth(200)
@@ -413,6 +476,18 @@ class UIVideoCapture(pg.LayoutWidget):
         splitterBuffer.addWidget(self.bufferSizeFrames_spinbox)
         splitterBuffer.addWidget(self.bufferSizeValMB_label)
         # splitterBuffer.addWidget(bufferSizeMB_label)
+        
+        splitterPipelineBuffer = QtWidgets.QSplitter()
+        splitterPipelineBuffer.setOrientation(QtCore.Qt.Horizontal)
+        splitterPipelineBuffer.setMaximumWidth(300)
+        splitterPipelineBuffer.addWidget(pipelineBuffer_label)
+        splitterPipelineBuffer.addWidget(pipelineBuffer_help)
+        splitterPipelineBuffer.addWidget(trackingBufferShort_label)
+        splitterPipelineBuffer.addWidget(self.trackingBufferFrames_spinbox)
+        splitterPipelineBuffer.addWidget(resultBufferShort_label)
+        splitterPipelineBuffer.addWidget(self.resultBufferFrames_spinbox)
+        splitterPipelineBuffer.addWidget(displayBufferShort_label)
+        splitterPipelineBuffer.addWidget(self.displayBufferFrames_spinbox)
         
         splitterBufProgress = QtWidgets.QSplitter()
         splitterBufProgress.setOrientation(QtCore.Qt.Horizontal)
@@ -589,10 +664,13 @@ class UIVideoCapture(pg.LayoutWidget):
         self.addWidget(splitter_live,row=2,col=0)
         self.addWidget(self.trigger_checkBox, row=3,col=0)
         # self.addWidget(self.lenBuffer_label,row=4,col=0)
-        self.addWidget(splitterMemory,row=4,col=0)
-        self.addWidget(splitterBuffer,row=5,col=0)
-        self.addWidget(splitterBufProgress,row=6,col=0)
-        self.addWidget(self.line1, row=1,col=1,rowspan=5)
+        self.addWidget(splitterMemory, row=4, col=0)
+        self.addWidget(splitterMemory, row=4, col=0)
+        self.addWidget(splitterBuffer, row=5, col=0)
+        self.addWidget(splitterPipelineBuffer, row=6, col=0)
+        self.addWidget(splitterBufProgress, row=7, col=0)
+
+        self.addWidget(self.line1, row=1, col=1, rowspan=7)
         
         self.addWidget(self.pixFormat_label,row=1,col=2)
         self.addWidget(self.pixFormat_comboBox,row=1,col=3)
@@ -906,8 +984,8 @@ class UIVideoCapture(pg.LayoutWidget):
         # measuredPlayfps=0
         #☺nbFramesBufferMax=1000
         # Création et démarrage des threads
-        nbFramesBufferMax = self.bufferSizeFrames_spinbox.value()
-        self.acquisition_thread = FileVideoStreamLive(self.video, nbFramesBufferMax)
+        camera_buffer_size = self.bufferSizeFrames_spinbox.value()
+        self.acquisition_thread = FileVideoStreamLive(self.video, camera_buffer_size)
         # self.analysis_thread = TadpoleAnalysis(self.acquisition_thread)
         
         # Démarrage des threads
