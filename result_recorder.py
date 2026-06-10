@@ -14,7 +14,7 @@ import queue
 
 
 class ResultRecorder(threading.Thread):
-    def __init__(self, result_queue, stop_event, file_path=None, flush_every=50):
+    def __init__(self, result_queue, stop_event, file_path=None, flush_every=50, metadata=None):
         threading.Thread.__init__(self)
 
         self.daemon = True
@@ -27,6 +27,7 @@ class ResultRecorder(threading.Thread):
 
         # Chemin du fichier CSV de sortie.
         self.file_path = file_path
+        self.metadata = metadata or {}
 
         # Nombre de lignes écrites avant de forcer un flush disque.
         self.flush_every = flush_every
@@ -50,6 +51,8 @@ class ResultRecorder(threading.Thread):
         with open(self.file_path, "w", newline="", encoding="utf-8") as csv_file:
             writer = csv.writer(csv_file, delimiter=";")
 
+            self._write_metadata(writer)
+
             writer.writerow([
                 "frame_id",
                 "timestamp",
@@ -60,11 +63,18 @@ class ResultRecorder(threading.Thread):
                 "tail_angle",
                 "tail_x",
                 "tail_y",
+
                 "okr_active",
-                "okr_speed",
-                "okr_direction",
-                "okr_frequency",
-                "okr_pattern",
+                "okr_timestamp",
+                "stim_width",
+                "stim_spacing",
+                "stim_speed",
+                "stim_switch_frequency",
+                "stim_pattern",
+                "stim_mode",
+                "stim_direction",
+                "stim_direction_text",
+
                 "valid",
                 "error",
             ])
@@ -87,11 +97,18 @@ class ResultRecorder(threading.Thread):
                     self._clean_value(result.tail_angle),
                     self._clean_value(result.tail_x),
                     self._clean_value(result.tail_y),
+
                     self._clean_value(okr.get("active", False)),
+                    self._clean_value(okr.get("timestamp", "")),
+                    self._clean_value(okr.get("width", 0)),
+                    self._clean_value(okr.get("spacing", 0)),
                     self._clean_value(okr.get("speed", 0)),
-                    self._clean_value(okr.get("direction", 0)),
                     self._clean_value(okr.get("frequency", 0)),
                     self._clean_value(okr.get("pattern", "")),
+                    self._clean_value(okr.get("mode", "")),
+                    self._clean_value(okr.get("direction", 0)),
+                    self._clean_value(okr.get("direction_text", "")),
+
                     self._clean_value(result.valid),
                     self._clean_value(result.error),
                 ])
@@ -102,6 +119,27 @@ class ResultRecorder(threading.Thread):
                     csv_file.flush()
 
         self.running = False
+        
+    def _write_metadata(self, writer):
+        framerate = self.metadata.get("framerate", "")
+        width = self.metadata.get("width", "")
+        height = self.metadata.get("height", "")
+        stage = self.metadata.get("stage", "")
+        created_at = self.metadata.get("created_at", "")
+
+        if created_at != "":
+            writer.writerow(["created at : " + str(created_at)])
+
+        if stage != "":
+            writer.writerow(["stage : " + str(stage)])
+
+        if framerate != "":
+            writer.writerow(["framerate : " + str(framerate) + " fps"])
+
+        if width != "" or height != "":
+            writer.writerow(["video size : " + str(width), str(height)])
+
+        writer.writerow([])
 
     def _clean_value(self, value):
         """

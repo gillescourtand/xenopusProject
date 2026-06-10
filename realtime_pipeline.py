@@ -42,7 +42,8 @@ class RealtimePipeline(object):
         frame_queue_size=500,
         result_queue_size=500,
         display_queue_size=5,
-        result_file_path=None
+        result_file_path=None,
+        metadata=None
     ):
         # Référence vers l'interface principale.
         # Elle permet au pipeline d'accéder aux paramètres sélectionnés dans l'interface
@@ -67,6 +68,9 @@ class RealtimePipeline(object):
         # Chemin du fichier CSV de sortie.
         # Si aucune valeur n'est donnée, ResultRecorder génère un nom automatiquement.
         self.result_file_path = result_file_path
+
+        # Métadonnées du fichier de résultats.
+        self.metadata = metadata or {}
 
         # Événement partagé entre les threads.
         # Quand stop_event est activé, tous les workers savent qu'ils doivent s'arrêter.
@@ -126,6 +130,7 @@ class RealtimePipeline(object):
             stop_event=self.stop_event,
             file_path=result_file_path,
             flush_every=50,
+            metadata=self.metadata,
         )
 
         # Dernier résultat de tracking disponible.

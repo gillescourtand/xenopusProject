@@ -7,6 +7,7 @@ Pont entre MotionAnalysis_Xenopus_v17d.py et la nouvelle architecture temps rée
 
 import os
 import time
+import re
 
 from realtime_pipeline import RealtimePipeline
 from display_worker import DisplayWorker
@@ -127,6 +128,7 @@ class AppController(object):
             5
         )
 
+        metadata = self._get_result_metadata()
         self.pipeline = RealtimePipeline(
             ui=self.ui,
             video=self.video,
@@ -136,6 +138,7 @@ class AppController(object):
             frame_queue_size=tracking_buffer_size,
             result_queue_size=result_buffer_size,
             display_queue_size=display_buffer_size,
+            metadata=metadata,
         )
 
         self.display_worker = DisplayWorker(
@@ -400,8 +403,54 @@ class AppController(object):
             print("safe_update_plot error:", exc)
 
     def get_state(self):
-        self.update_okr_from_ui()
-        return self.okr_state.snapshot()
+        """
+        Retourne l'état optocinétique courant pour l'associer à chaque frame.
+        """
+        try:
+            opto = getattr(self.ui, "optokinetic_Widget", None)
+
+            if opto is None:
+                return {
+                    "active": False,
+                    "timestamp": time.perf_counter(),
+                }
+
+            return {
+                "active": bool(getattr(opto, "stimulation", False)),
+                "timestamp": time.perf_counter(),
+
+                "width": self._read_value(getattr(opto, "stim_width", None), 0),
+                "spacing": self._read_value(getattr(opto, "stim_spacing", None), 0),
+                "speed": self._read_value(getattr(opto, "stim_speed", None), 0),
+                "frequency": self._read_value(getattr(opto, "stim_switch_frequency", None), 0),
+
+                "pattern": self._read_value(getattr(opto, "stim_pattern", None), ""),
+                "mode": self._read_value(getattr(opto, "stim_mode", None), ""),
+
+                "direction": self._read_value(getattr(opto, "stim_direction", None), 0),
+                "direction_text": opto.stim_direction_input.currentText()
+                if hasattr(opto, "stim_direction_input") else "",
+            }
+
+        except Exception as exc:
+            print("get_state OKR error:", exc)
+            return None
+
+    def _read_value(self, value_object, default_value):
+        """
+        Lit une valeur depuis un objet simple ou un objet contenant .value.
+        """
+        try:
+            if value_object is None:
+                return default_value
+
+            if hasattr(value_object, "value"):
+                return value_object.value
+
+            return value_object
+
+        except Exception:
+            return default_value
 
     def update_okr_from_ui(self):
         try:
@@ -431,12 +480,102 @@ class AppController(object):
             return [0, 0]
 
     def _default_result_file(self):
-        filename = "xenopus_tracking_{}.csv".format(
-            time.strftime("%Y%m%d_%H%M%S")
+        output_dir = self._get_output_dir()
+        stage = self._get_stage()
+
+        date_prefix = time.strftime("%y%m%d")
+        file_prefix = "{}-St{}_".format(date_prefix, stage)
+
+        track_number = self._get_next_track_number(output_dir, file_prefix)
+
+        filename = "{}{:03d}.csv".format(file_prefix, track_number)
+
+        return os.path.join(output_dir, filename)
+    
+    def _get_output_dir(self):
+        output_dir = getattr(self.ui, "result_save_dir", None)
+
+        if output_dir is None or output_dir == "":
+            output_dir = os.getcwd()
+
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        return output_dir
+
+
+    def _get_stage(self):
+        stage = ""
+
+        stage_input = getattr(self.ui, "stageLineEdit", None)
+
+        if stage_input is not None:
+            stage = stage_input.text().strip()
+
+        if stage.lower().startswith("st"):
+            stage = stage[2:]
+
+        stage = re.sub(r"[^0-9A-Za-z]+", "", stage)
+
+        if stage == "":
+            stage = "NA"
+
+        return stage
+
+
+    def _get_next_track_number(self, output_dir, file_prefix):
+        max_number = 0
+
+        pattern = re.compile(
+            r"^{}(\d{{3}})\.csv$".format(re.escape(file_prefix))
         )
-        return os.path.join(os.getcwd(), filename)
+
+        try:
+            for filename in os.listdir(output_dir):
+                match = pattern.match(filename)
+
+                if match:
+                    number = int(match.group(1))
+                    max_number = max(max_number, number)
+
+        except Exception:
+            pass
+
+        return max_number + 1
+
+
+    def preview_next_result_filename(self):
+        output_dir = self._get_output_dir()
+        stage = self._get_stage()
+
+        date_prefix = time.strftime("%y%m%d")
+        file_prefix = "{}-St{}_".format(date_prefix, stage)
+
+        track_number = self._get_next_track_number(output_dir, file_prefix)
+
+        return "{}{:03d}.csv".format(file_prefix, track_number)
 
     def get_stats(self):
         if self.pipeline is None:
             return {}
         return self.pipeline.get_stats()
+    
+    def _get_result_metadata(self):
+        try:
+            framerate = ""
+
+            try:
+                framerate = self.video.device.ResultingFrameRate.GetValue()
+            except Exception:
+                framerate = getattr(self.video, "measuredLivefps", "")
+
+            return {
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "stage": self._get_stage(),
+                "framerate": round(float(framerate), 3) if framerate != "" else "",
+                "width": getattr(self.video, "width", ""),
+                "height": getattr(self.video, "height", ""),
+            }
+
+        except Exception:
+            return {}

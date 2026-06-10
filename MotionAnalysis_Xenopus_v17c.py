@@ -430,6 +430,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.tracking = False
         self.analysis_thread = None
+        self.result_save_dir = None
         self.controller = None
 
         self.plot_timer = QTimer()
@@ -452,7 +453,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
     def initUI(self):
 
-        self.setWindowIcon(QtgGui.QIcon('Imagys_blue\logoAnimotion-square-112.png'))
+        self.setWindowIcon(QtgGui.QIcon(os.path.join('Imagys_blue', 'logoAnimotion-square-112.png')))
 
         self.area = DockArea()
         self.setCentralWidget(self.area)
@@ -666,6 +667,31 @@ class UIXenopus(QtWidgets.QMainWindow):
         resetBuffer_btn = QtWidgets.QPushButton('Reset buffer')
         resetBuffer_btn.clicked.connect(self.reset_Buffer)
 
+        self.outputFolder_btn = QtWidgets.QPushButton("Output folder")
+        self.outputFolder_btn.clicked.connect(self.choose_result_folder)
+
+        self.outputFolder_label = QtWidgets.QLabel("No folder selected")
+        self.outputFolder_label.setMinimumWidth(180)
+        self.outputFolder_label.setMaximumWidth(260)
+
+        stage_label = QtWidgets.QLabel("Stage")
+        self.stageLineEdit = QtWidgets.QLineEdit()
+        self.stageLineEdit.setPlaceholderText("ex: 52")
+        self.stageLineEdit.setMaximumWidth(60)
+        self.stageLineEdit.textChanged.connect(self.update_next_csv_preview)
+
+        self.nextCsv_label = QtWidgets.QLabel("Next CSV: -")
+        self.nextCsv_label.setMinimumWidth(180)
+        self.nextCsv_label.setMaximumWidth(260)
+
+        splitter_Output = QtWidgets.QSplitter()
+        splitter_Output.setOrientation(Qt.Horizontal)
+        splitter_Output.addWidget(self.outputFolder_btn)
+        splitter_Output.addWidget(self.outputFolder_label)
+        splitter_Output.addWidget(stage_label)
+        splitter_Output.addWidget(self.stageLineEdit)
+        splitter_Output.addWidget(self.nextCsv_label)
+
         self.w8.addWidget(self.manipType_comboBox, row=0, col=0)
         self.w8.addWidget(self.label8, row=1, col=0)
         self.w8.addWidget(splitter_Background, row=1,col=1,colspan=2)
@@ -673,11 +699,15 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.w8.addWidget(splitter_ThreshEyes, row=2, col=1,colspan=3)
         self.w8.addWidget(splitter_ThreshTail, row=3, col=1,colspan=3)
 
-        self.w8.addWidget(initLimbTrack_btn, row=4, col=1)
-        self.w8.addWidget(self.track_checkBox,row=5,col=1)
-        self.w8.addWidget(saveResults_btn,row=5,col=2)
-        self.w8.addWidget(resetPlots_btn,row=4,col=3)
-        self.w8.addWidget(resetBuffer_btn,row=5,col=3)
+        self.w8.addWidget(splitter_Output, row=4, col=1, colspan=3)
+
+        self.w8.addWidget(initLimbTrack_btn, row=5, col=1)
+        self.w8.addWidget(resetPlots_btn, row=5, col=3)
+
+        self.w8.addWidget(self.track_checkBox, row=6, col=1)
+        self.w8.addWidget(saveResults_btn, row=6, col=2)
+        self.w8.addWidget(resetBuffer_btn, row=6, col=3)
+
         self.d8.addWidget(self.w8)
 
         self.w10 = pg.LayoutWidget()
@@ -880,6 +910,66 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.mark.size=8
         self.mark.setData(pos=pos, adj=adj, pen=lines, size=self.mark.size, symbolBrush=symbolBrushes,symbolPen='w',symbol=symbols, pxMode=False, text=texts)
 
+    def choose_result_folder(self):
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Choose output folder",
+            os.path.expanduser("~")
+        )
+
+        if folder:
+            self.result_save_dir = folder
+            self.outputFolder_label.setText(folder)
+            self.update_next_csv_preview()
+
+
+    def get_result_stage(self):
+        stage = self.stageLineEdit.text().strip()
+
+        if stage.lower().startswith("st"):
+            stage = stage[2:]
+
+        return stage
+
+
+    def update_next_csv_preview(self):
+        try:
+            if self.result_save_dir is None:
+                self.nextCsv_label.setText("Next CSV: -")
+                return
+
+            stage = self.get_result_stage()
+
+            if stage == "":
+                self.nextCsv_label.setText("Next CSV: missing stage")
+                return
+
+            filename = self.controller.preview_next_result_filename()
+            self.nextCsv_label.setText("Next CSV: " + filename)
+
+        except Exception:
+            self.nextCsv_label.setText("Next CSV: -")
+
+
+    def validate_result_settings(self):
+        if self.result_save_dir is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Output folder",
+                "Choose an output folder before starting tracking."
+            )
+            return False
+
+        if self.get_result_stage() == "":
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Stage",
+                "Define the Xenopus stage before starting tracking."
+            )
+            return False
+
+        return True
+
     @pyqtSlot()
     def toggle_tracking(self):
         if self.controller is None:
@@ -898,6 +988,10 @@ class UIXenopus(QtWidgets.QMainWindow):
                 self.track_checkBox.setChecked(False)
                 return
 
+            if not self.validate_result_settings():
+                self.track_checkBox.setChecked(False)
+                return
+
             self.reset_Plot()
             self.reset_Buffer()
 
@@ -911,6 +1005,8 @@ class UIXenopus(QtWidgets.QMainWindow):
                     time.sleep(0.1)
             except Exception as exc:
                 print("Erreur start acquisition:", exc)
+                self.track_checkBox.setChecked(False)
+                return
 
             try:
                 if self.video_capture_widget.trigger_checkBox.isChecked():
