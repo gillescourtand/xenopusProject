@@ -480,17 +480,7 @@ class AppController(object):
             return [0, 0]
 
     def _default_result_file(self):
-        output_dir = self._get_output_dir()
-        stage = self._get_stage()
-
-        date_prefix = time.strftime("%y%m%d")
-        file_prefix = "{}-St{}_".format(date_prefix, stage)
-
-        track_number = self._get_next_track_number(output_dir, file_prefix)
-
-        filename = "{}{:03d}.csv".format(file_prefix, track_number)
-
-        return os.path.join(output_dir, filename)
+        return self.preview_next_result_file_path()
     
     def _get_output_dir(self):
         output_dir = getattr(self.ui, "result_save_dir", None)
@@ -522,6 +512,18 @@ class AppController(object):
 
         return stage
 
+    def _get_requested_track_number(self):
+        number_input = getattr(self.ui, "fileNumber_spinBox", None)
+
+        if number_input is None:
+            return None
+
+        number = int(number_input.value())
+
+        if number <= 0:
+            return None
+
+        return number
 
     def _get_next_track_number(self, output_dir, file_prefix):
         max_number = 0
@@ -545,15 +547,25 @@ class AppController(object):
 
 
     def preview_next_result_filename(self):
+        return os.path.basename(self.preview_next_result_file_path())
+
+    def preview_next_result_file_path(self):
         output_dir = self._get_output_dir()
         stage = self._get_stage()
 
         date_prefix = time.strftime("%y%m%d")
         file_prefix = "{}-St{}_".format(date_prefix, stage)
 
-        track_number = self._get_next_track_number(output_dir, file_prefix)
+        requested_number = self._get_requested_track_number()
 
-        return "{}{:03d}.csv".format(file_prefix, track_number)
+        if requested_number is None:
+            track_number = self._get_next_track_number(output_dir, file_prefix)
+        else:
+            track_number = requested_number
+
+        filename = "{}{:03d}.csv".format(file_prefix, track_number)
+
+        return os.path.join(output_dir, filename)
 
     def get_stats(self):
         if self.pipeline is None:

@@ -683,6 +683,21 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.nextCsv_label = QtWidgets.QLabel("Next CSV: -")
         self.nextCsv_label.setMinimumWidth(180)
         self.nextCsv_label.setMaximumWidth(260)
+        
+        fileNumber_label = QtWidgets.QLabel("File no.")
+
+        self.fileNumber_spinBox = QtWidgets.QSpinBox()
+        self.fileNumber_spinBox.setMinimum(0)
+        self.fileNumber_spinBox.setMaximum(999)
+        self.fileNumber_spinBox.setValue(0)
+        self.fileNumber_spinBox.setSpecialValueText("auto")
+        self.fileNumber_spinBox.setMaximumWidth(70)
+        self.fileNumber_spinBox.setToolTip(
+            "Optional file number.\n"
+            "auto = next available number.\n"
+            "Example: 3 creates file ..._003.csv"
+        )
+        self.fileNumber_spinBox.valueChanged.connect(self.update_next_csv_preview)
 
         splitter_Output = QtWidgets.QSplitter()
         splitter_Output.setOrientation(Qt.Horizontal)
@@ -690,6 +705,8 @@ class UIXenopus(QtWidgets.QMainWindow):
         splitter_Output.addWidget(self.outputFolder_label)
         splitter_Output.addWidget(stage_label)
         splitter_Output.addWidget(self.stageLineEdit)
+        splitter_Output.addWidget(fileNumber_label)
+        splitter_Output.addWidget(self.fileNumber_spinBox)
         splitter_Output.addWidget(self.nextCsv_label)
 
         self.w8.addWidget(self.manipType_comboBox, row=0, col=0)
@@ -931,6 +948,13 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         return stage
 
+    def get_result_file_number(self):
+        number = self.fileNumber_spinBox.value()
+
+        if number == 0:
+            return None
+
+        return number
 
     def update_next_csv_preview(self):
         try:
@@ -944,12 +968,15 @@ class UIXenopus(QtWidgets.QMainWindow):
                 self.nextCsv_label.setText("Next CSV: missing stage")
                 return
 
+            if self.controller is None:
+                self.nextCsv_label.setText("Next CSV: -")
+                return
+
             filename = self.controller.preview_next_result_filename()
             self.nextCsv_label.setText("Next CSV: " + filename)
 
         except Exception:
             self.nextCsv_label.setText("Next CSV: -")
-
 
     def validate_result_settings(self):
         if self.result_save_dir is None:
@@ -967,6 +994,27 @@ class UIXenopus(QtWidgets.QMainWindow):
                 "Define the Xenopus stage before starting tracking."
             )
             return False
+
+        try:
+            if self.controller is not None:
+                result_path = self.controller.preview_next_result_file_path()
+
+                if os.path.exists(result_path):
+                    reply = QtWidgets.QMessageBox.warning(
+                        self,
+                        "Existing CSV file",
+                        "This file already exists and will be overwritten:\n\n"
+                        + result_path
+                        + "\n\nContinue ?",
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.No
+                    )
+
+                    if reply != QtWidgets.QMessageBox.Yes:
+                        return False
+
+        except Exception as exc:
+            print("CSV overwrite check error:", exc)
 
         return True
 
