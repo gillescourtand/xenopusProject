@@ -379,7 +379,7 @@ class UIVideoCapture(pg.LayoutWidget):
         bufferSize_label.setMinimumWidth(100)
         bufferSize_label.setMaximumWidth(120)
         bufferSize_label.setToolTip(
-            "Camera buffer : nombre maximum de frames gardées côté acquisition caméra."
+            "Camera buffer: the maximum number of frames stored on the camera acquisition side."
         )
         self.bufferSizeValue_label= QtWidgets.QLabel("000")
         self.bufferSizeValue_label.setMinimumWidth(20)
@@ -397,7 +397,7 @@ class UIVideoCapture(pg.LayoutWidget):
         self.bufferSizeFrames_spinbox.setValue(10)
         self.bufferSizeFrames_spinbox.valueChanged.connect(self.bufferSizeMB_update)
         self.bufferSizeFrames_spinbox.setToolTip(
-            "Nombre maximum de frames stockées dans le buffer caméra avant analyse."
+            "Maximum number of frames stored in the camera buffer before analysis."
         )        
                 
         pipelineBuffer_label = QtWidgets.QLabel("Pipeline buffers")
@@ -410,14 +410,14 @@ class UIVideoCapture(pg.LayoutWidget):
         pipelineBuffer_help.setAlignment(QtCore.Qt.AlignCenter)
         pipelineBuffer_help.setToolTip(
             "Pipeline buffers:\n"
-            "T = Tracking buffer : frames en attente d'analyse.\n"
-            "R = Result buffer : résultats en attente d'écriture CSV.\n"
-            "D = Display buffer : éléments gardés pour l'affichage.\n\n"
-            "Ces valeurs sont utilisées au démarrage du tracking."
+            "T = Tracking buffer : frames awaiting analysis.\n"
+            "R = Result buffer : results awaiting CSV writing.\n"
+            "D = Display buffer : elements kept for display.\n\n"
+            "These values are used at the start of the tracking."
         )
 
         trackingBufferShort_label = QtWidgets.QLabel("T:")
-        trackingBufferShort_label.setToolTip("Tracking buffer : frames en attente d'analyse.")
+        trackingBufferShort_label.setToolTip("Tracking buffer : frames awaiting analysis.")
 
         self.trackingBufferFrames_spinbox = QtWidgets.QSpinBox()
         self.trackingBufferFrames_spinbox.setMaximumWidth(60)
@@ -425,11 +425,11 @@ class UIVideoCapture(pg.LayoutWidget):
         self.trackingBufferFrames_spinbox.setMaximum(5000)
         self.trackingBufferFrames_spinbox.setValue(500)
         self.trackingBufferFrames_spinbox.setToolTip(
-            "Nombre maximum de frames en attente de tracking."
+            "Maximum number of frames awaiting analysis."
         )
 
         resultBufferShort_label = QtWidgets.QLabel("R:")
-        resultBufferShort_label.setToolTip("Result buffer : résultats en attente d'écriture CSV.")
+        resultBufferShort_label.setToolTip("Result buffer : results awaiting CSV writing.")
 
         self.resultBufferFrames_spinbox = QtWidgets.QSpinBox()
         self.resultBufferFrames_spinbox.setMaximumWidth(60)
@@ -437,11 +437,11 @@ class UIVideoCapture(pg.LayoutWidget):
         self.resultBufferFrames_spinbox.setMaximum(5000)
         self.resultBufferFrames_spinbox.setValue(500)
         self.resultBufferFrames_spinbox.setToolTip(
-            "Nombre maximum de résultats en attente d'écriture CSV."
+            "Maximum number of results awaiting CSV writing."
         )
 
         displayBufferShort_label = QtWidgets.QLabel("D:")
-        displayBufferShort_label.setToolTip("Display buffer : données gardées pour l'affichage.")
+        displayBufferShort_label.setToolTip("Display buffer : elements kept for display.")
 
         self.displayBufferFrames_spinbox = QtWidgets.QSpinBox()
         self.displayBufferFrames_spinbox.setMaximumWidth(50)
@@ -449,7 +449,7 @@ class UIVideoCapture(pg.LayoutWidget):
         self.displayBufferFrames_spinbox.setMaximum(100)
         self.displayBufferFrames_spinbox.setValue(5)
         self.displayBufferFrames_spinbox.setToolTip(
-            "Nombre maximum d'éléments gardés pour l'affichage."
+            "Maximum number of elements kept for display."
         )      
         
         self.buffer_progress=QtWidgets.QProgressBar()

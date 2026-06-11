@@ -660,8 +660,6 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.threshEye1_slider.setValue(60)
         self.threshEye2_slider.setValue(60)
 
-        saveResults_btn = QtWidgets.QPushButton('Save results')
-        saveResults_btn.clicked.connect(self.save_ResultsNow)
         resetPlots_btn = QtWidgets.QPushButton('Reset plots')
         resetPlots_btn.clicked.connect(self.reset_Plot)
         resetBuffer_btn = QtWidgets.QPushButton('Reset buffer')
@@ -721,8 +719,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.w8.addWidget(initLimbTrack_btn, row=5, col=1)
         self.w8.addWidget(resetPlots_btn, row=5, col=3)
 
-        self.w8.addWidget(self.track_checkBox, row=6, col=1)
-        self.w8.addWidget(saveResults_btn, row=6, col=2)
+        self.w8.addWidget(self.track_checkBox, row=6, col=1, colspan=2)
         self.w8.addWidget(resetBuffer_btn, row=6, col=3)
 
         self.d8.addWidget(self.w8)
@@ -1024,7 +1021,7 @@ class UIXenopus(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(
                 self,
                 "Controller",
-                "AppController n'est pas initialisé dans le main."
+                "AppController is not initialized in the main."
             )
             self.track_checkBox.setChecked(False)
             return
@@ -1310,62 +1307,6 @@ class UIXenopus(QtWidgets.QMainWindow):
                     dataArray3 = np.asarray(self.tailAngleList)
 
                     self.w5.plot(dataArray3,pen=self.penGreen,clear=True)
-
-    def save_ResultsNow(self):
-        filename,_ = QtWidgets.QFileDialog.getSaveFileName(ui,"Save track file", "", ".csv")
-        print(filename)
-        resultFile=self.create_Result(filename,0)
-        print(resultFile)
-        self.save_Results(resultFile)
-
-    def create_Result(self,filePath,phaseDuration):
-
-        framerate=self.video_capture_widget.resultFPSValue_label.text()
-
-        csvResult=csv.writer(open(filePath+".csv","w",newline=''))
-
-        csvResult.writerow([self.video.path])
-        csvResult.writerow(["framerate : "+str(framerate)+' fps'])
-
-        csvResult.writerow(["video size : "+str(self.video.width)+" ; "+str(self.video.height)])
-        csvResult.writerow([" "])
-        if self.manipType_comboBox.currentText()=="eyes-tail track":
-            csvResult.writerow(['frame_idx',"timestamp","eye1 angle","eye2 angle","tail angle","eye1 Ymove","eye2 Ymove","optostim"])
-
-        elif ui.manipType_comboBox.currentText()=="eyes track only":
-            csvResult.writerow(['frame_idx',"timestamp","eye1 angle","eye2 angle","eye1 Ymove","eye2 Ymove","optostim_speed","optostim_direction"])
-
-        return csvResult
-
-    def save_Results(self,result_f):
-
-        if self.manipType_comboBox.currentText()=="eyes-tail track":
-
-            print(len(timestampList),len(self.roisEllipseEye[0].angleList),len(self.tailAngleList))
-            for i in range(len(timestampList)):
-
-                result_f.writerow([self.roisEllipseEye[0].angleList[i][0],
-                                   timestampList[i][1],
-                                   self.roisEllipseEye[0].angleList[i][1],
-                                   self.roisEllipseEye[1].angleList[i][1],
-                                   self.tailAngleList[i][1],
-                                   self.roisEllipseEye[0].yList[i][1],
-                                   self.roisEllipseEye[1].yList[i][1],
-
-                                   ])
-
-        elif self.manipType_comboBox.currentText()=="eyes track only":
-
-            for i in range(len(self.roisEllipseEye[0].angleList)):
-
-                result_f.writerow([self.roisEllipseEye[0].angleList[i][0],
-                                   timestampList[i][1],
-                                   self.roisEllipseEye[0].angleList[i][1],
-                                   self.roisEllipseEye[1].angleList[i][1],
-                                   self.roisEllipseEye[0].yList[i][1],
-                                   self.roisEllipseEye[1].yList[i][1],
-
-                                   ])
 
     def closeEvent(self, event):
 
