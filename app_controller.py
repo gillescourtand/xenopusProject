@@ -528,20 +528,31 @@ class AppController(object):
     def _get_next_track_number(self, output_dir, file_prefix):
         max_number = 0
 
-        pattern = re.compile(
-            r"^{}(\d{{3}})\.csv$".format(re.escape(file_prefix))
-        )
-
         try:
+            print("CSV output dir:", output_dir)
+            print("CSV expected prefix:", file_prefix)
+
             for filename in os.listdir(output_dir):
-                match = pattern.match(filename)
+                filename_clean = filename.strip()
 
-                if match:
-                    number = int(match.group(1))
-                    max_number = max(max_number, number)
+                if not filename_clean.lower().endswith(".csv"):
+                    continue
 
-        except Exception:
-            pass
+                if not filename_clean.startswith(file_prefix):
+                    continue
+
+                number_part = filename_clean[len(file_prefix):-4]
+
+                if not number_part.isdigit():
+                    continue
+
+                number = int(number_part)
+                max_number = max(max_number, number)
+
+                print("Existing CSV detected:", filename_clean)
+
+        except Exception as exc:
+            print("CSV numbering error:", exc)
 
         return max_number + 1
 

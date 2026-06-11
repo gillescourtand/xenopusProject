@@ -589,13 +589,25 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.blackBgd_radioButton.setChecked(False)
         self.blackBgd_radioButton.setText("Black background")
 
-        initLimbTrack_btn= QtWidgets.QPushButton('init limbs track')
+        initLimbTrack_btn = QtWidgets.QPushButton('Init limbs')
         initLimbTrack_btn.clicked.connect(self.init_track)
+        initLimbTrack_btn.setMinimumHeight(28)
 
-        self.track_checkBox = QtWidgets.QPushButton('Track')
+        self.track_checkBox = QtWidgets.QPushButton('Start tracking')
         self.track_checkBox.setCheckable(True)
         self.track_checkBox.setChecked(False)
         self.track_checkBox.clicked.connect(self.toggle_tracking)
+        self.track_checkBox.setMinimumHeight(60)
+        self.track_checkBox.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:checked {
+                background-color: #2f8f46;
+                color: white;
+            }
+        """)
 
         splitter_ThreshTail=QtWidgets.QSplitter()
         tailSplitter_label= QtWidgets.QLabel(splitter_ThreshTail)
@@ -662,8 +674,11 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         resetPlots_btn = QtWidgets.QPushButton('Reset plots')
         resetPlots_btn.clicked.connect(self.reset_Plot)
+        resetPlots_btn.setMinimumHeight(28)
+
         resetBuffer_btn = QtWidgets.QPushButton('Reset buffer')
         resetBuffer_btn.clicked.connect(self.reset_Buffer)
+        resetBuffer_btn.setMinimumHeight(28)
 
         self.outputFolder_btn = QtWidgets.QPushButton("Output folder")
         self.outputFolder_btn.clicked.connect(self.choose_result_folder)
@@ -706,6 +721,23 @@ class UIXenopus(QtWidgets.QMainWindow):
         splitter_Output.addWidget(fileNumber_label)
         splitter_Output.addWidget(self.fileNumber_spinBox)
         splitter_Output.addWidget(self.nextCsv_label)
+        
+        actionPanel = QtWidgets.QWidget()
+        actionLayout = QtWidgets.QHBoxLayout(actionPanel)
+        actionLayout.setContentsMargins(0, 4, 0, 0)
+        actionLayout.setSpacing(8)
+
+        secondaryButtons = QtWidgets.QWidget()
+        secondaryLayout = QtWidgets.QVBoxLayout(secondaryButtons)
+        secondaryLayout.setContentsMargins(0, 0, 0, 0)
+        secondaryLayout.setSpacing(5)
+
+        secondaryLayout.addWidget(initLimbTrack_btn)
+        secondaryLayout.addWidget(resetPlots_btn)
+        secondaryLayout.addWidget(resetBuffer_btn)
+
+        actionLayout.addWidget(self.track_checkBox, 2)
+        actionLayout.addWidget(secondaryButtons, 1)
 
         self.w8.addWidget(self.manipType_comboBox, row=0, col=0)
         self.w8.addWidget(self.label8, row=1, col=0)
@@ -715,12 +747,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.w8.addWidget(splitter_ThreshTail, row=3, col=1,colspan=3)
 
         self.w8.addWidget(splitter_Output, row=4, col=1, colspan=3)
-
-        self.w8.addWidget(initLimbTrack_btn, row=5, col=1)
-        self.w8.addWidget(resetPlots_btn, row=5, col=3)
-
-        self.w8.addWidget(self.track_checkBox, row=6, col=1, colspan=2)
-        self.w8.addWidget(resetBuffer_btn, row=6, col=3)
+        self.w8.addWidget(actionPanel, row=5, col=1, colspan=3, rowspan=2)
 
         self.d8.addWidget(self.w8)
 
@@ -1077,6 +1104,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
             self.track_checkBox.setText("Track")
             self.updatePlot_Full()
+            self.update_next_csv_preview()
             print("Tracking stopped")
 
     def check_analysis_parameters(self):
