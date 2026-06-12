@@ -42,6 +42,7 @@ class UIOptostim(pg.LayoutWidget):
     
     # stim_width, stim_spacing, stim_speed, stim_switch_frequency, stim_pattern, stim_mode, stim_direction
     stim_signal=pyqtSignal(int,int,int,int,str,str,str) #speed, direction
+    pygame_finished = pyqtSignal()
         
     
     def __init__(self):
@@ -53,6 +54,7 @@ class UIOptostim(pg.LayoutWidget):
         self.stim_spacing = MPValue('i',20)
         self.stim_speed = MPValue('i',0)
         self.stim_switch_frequency = MPValue('i',2)
+        self.stim_duration_cycle = MPValue('i',12)
         self.stim_pattern = Value('Lines')
         self.stim_mode = Value('Continue')
         # self.stim_direction = Value(1)
@@ -65,6 +67,7 @@ class UIOptostim(pg.LayoutWidget):
         self.thread_list=[]
         
         self.stim_signal.connect(self.update_gui)
+        self.pygame_finished.connect(self.cleanup_pygame_thread)
         
         """
         Use Manager to create multiple shared objects, including dicts and lists. Use Manager to share data across computers on a network.
@@ -84,133 +87,151 @@ class UIOptostim(pg.LayoutWidget):
     def initUI(self):
         self.setWindowTitle('Optostimulation Control Panel')
 
-        # self.layout = QVBoxLayout()
-
         self.stim_mode_label = QtWidgets.QLabel('Display Mode:')
-        
+
         self.stim_pattern_input = QtWidgets.QComboBox(self)
         self.stim_pattern_input.addItems(['White Lines', 'Green Lines', 'Grid', 'Diagonal Grid', 'Random dots'])
         self.stim_pattern_input.currentIndexChanged.connect(self.update_values)
-        
+
         self.stim_mode_input = QtWidgets.QComboBox(self)
         self.stim_mode_input.addItems(['Continue', 'Alternate'])
         self.stim_mode_input.currentIndexChanged.connect(self.update_values)
-        
+
         self.stim_direction_input = QtWidgets.QComboBox(self)
         self.stim_direction_input.addItems(['Right', 'Left'])
         self.stim_direction_input.currentIndexChanged.connect(self.change_direction)
-        
-        splitter_display = QtWidgets.QSplitter()
-        splitter_display.setOrientation(QtCore.Qt.Horizontal)
-        splitter_display.setMaximumWidth(150)
-        splitter_display.addWidget(self.stim_mode_label)
-        splitter_display.addWidget(self.stim_pattern_input)
-        splitter_display.addWidget(self.stim_mode_input)
-        splitter_display.addWidget(self.stim_direction_input)
 
+        display_container = QtWidgets.QWidget()
+        display_layout = QtWidgets.QHBoxLayout(display_container)
+        display_layout.setContentsMargins(8, 6, 8, 4)
+        display_layout.setSpacing(8)
+        display_layout.addWidget(self.stim_mode_label)
+        display_layout.addWidget(self.stim_pattern_input, 1)
+        display_layout.addWidget(self.stim_mode_input, 1)
+        display_layout.addWidget(self.stim_direction_input, 1)
 
         self.stim_width_label = QtWidgets.QLabel('Stim Width:')
         self.stim_width_input = QtWidgets.QLineEdit(self)
         self.stim_width_input.setText('5')
         self.stim_width_input.returnPressed.connect(self.update_values)
-        
-        splitterstim_width = QtWidgets.QSplitter()
-        splitterstim_width.setOrientation(QtCore.Qt.Horizontal)
-        splitterstim_width.setMaximumWidth(150)
-        splitterstim_width.addWidget(self.stim_width_label)
-        splitterstim_width.addWidget(self.stim_width_input)
 
-        self.stim_spacing_label = QtWidgets.QLabel('Stim pacing:')
+        self.stim_spacing_label = QtWidgets.QLabel('Stim Spacing:')
         self.stim_spacing_input = QtWidgets.QLineEdit(self)
         self.stim_spacing_input.setText('20')
         self.stim_spacing_input.returnPressed.connect(self.update_values)
-        
-        splitterstim_spacing = QtWidgets.QSplitter()
-        splitterstim_spacing.setOrientation(QtCore.Qt.Horizontal)
-        splitterstim_spacing.setMaximumWidth(150)
-        splitterstim_spacing.addWidget(self.stim_spacing_label)
-        splitterstim_spacing.addWidget(self.stim_spacing_input)
-        
 
         self.stim_speed_label = QtWidgets.QLabel('Stim Speed:')
-        self.layout.addWidget(self.stim_speed_label)
         self.stim_speed_input = QtWidgets.QLineEdit(self)
         self.stim_speed_input.setText('2')
         self.stim_speed_input.returnPressed.connect(self.update_values)
-        
-        splitterstim_speed = QtWidgets.QSplitter()
-        splitterstim_speed.setOrientation(QtCore.Qt.Horizontal)
-        splitterstim_speed.setMaximumWidth(150)
-        splitterstim_speed.addWidget(self.stim_speed_label)
-        splitterstim_speed.addWidget(self.stim_speed_input)
-        
-        self.stim_switch_frequency_label = QtWidgets.QLabel('Switch Frequency:')
-        self.layout.addWidget(self.stim_switch_frequency_label)
+
+        self.stim_switch_frequency_label = QtWidgets.QLabel('Switch Frequency (s):')
         self.stim_switch_frequency_input = QtWidgets.QLineEdit(self)
         self.stim_switch_frequency_input.setText('2')
         self.stim_switch_frequency_input.returnPressed.connect(self.update_values)
-        
-        splitterstim_switch_frequency = QtWidgets.QSplitter()
-        splitterstim_switch_frequency.setOrientation(QtCore.Qt.Horizontal)
-        splitterstim_switch_frequency.setMaximumWidth(150)
-        splitterstim_switch_frequency.addWidget(self.stim_switch_frequency_label)
-        splitterstim_switch_frequency.addWidget(self.stim_switch_frequency_input)
+
+        self.stim_duration_label = QtWidgets.QLabel('Duration (cycle):')
+        self.stim_duration_input = QtWidgets.QLineEdit(self)
+        self.stim_duration_input.setText('12')
+        self.stim_duration_input.returnPressed.connect(self.update_values)
+
+        self.stim_duration_ckb = QtWidgets.QCheckBox(self)
+        self.stim_duration_ckb.setToolTip('Enable automatic stop after the selected number of cycles')
+
+        parameters_container = QtWidgets.QWidget()
+        parameters_layout = QtWidgets.QGridLayout(parameters_container)
+        parameters_layout.setContentsMargins(8, 4, 8, 4)
+        parameters_layout.setHorizontalSpacing(8)
+        parameters_layout.setVerticalSpacing(8)
+
+        parameters_layout.addWidget(self.stim_width_label, 0, 0)
+        parameters_layout.addWidget(self.stim_width_input, 0, 1)
+        parameters_layout.addWidget(self.stim_switch_frequency_label, 0, 2)
+        parameters_layout.addWidget(self.stim_switch_frequency_input, 0, 3)
+
+        parameters_layout.addWidget(self.stim_spacing_label, 1, 0)
+        parameters_layout.addWidget(self.stim_spacing_input, 1, 1)
+        parameters_layout.addWidget(self.stim_duration_label, 1, 2)
+        parameters_layout.addWidget(self.stim_duration_input, 1, 3)
+        parameters_layout.addWidget(self.stim_duration_ckb, 1, 4)
+
+        parameters_layout.addWidget(self.stim_speed_label, 2, 0)
+        parameters_layout.addWidget(self.stim_speed_input, 2, 1)
+
+        parameters_layout.setColumnStretch(1, 1)
+        parameters_layout.setColumnStretch(3, 1)
 
         self.pause_button = QtWidgets.QPushButton('Pause', self)
         self.pause_button.clicked.connect(self.toggle_stim)
-        
+
         self.display_button = QtWidgets.QPushButton('screen/stop', self)
         self.display_button.setCheckable(True)
         self.display_button.clicked.connect(self.start_pygame)
-        
-        self.save_button = QtWidgets.QPushButton('save', self)
-        self.save_button.clicked.connect(self.save_values)
-        
-        splitter_control = QtWidgets.QSplitter()
-        splitter_control.setOrientation(QtCore.Qt.Horizontal)
-        splitter_control.addWidget(self.display_button)
-        splitter_control.addWidget(self.pause_button)
-        splitter_control.addWidget(self.save_button)
-        
-        self.addWidget(splitter_display,row=0,col=0,colspan=2)
-        self.addWidget(splitterstim_width,row=1,col=0)
-        self.addWidget(splitterstim_spacing,row=1,col=1)
-        self.addWidget(splitterstim_speed,row=2,col=0)
-        self.addWidget(splitterstim_switch_frequency,row=2,col=1)
-        # self.addWidget(self.pause_button,row=3,col=1)
-        # self.addWidget(self.display_button,row=3,col=0)
-        # self.addWidget(self.save_button,row=3,col=2)
-        self.addWidget(splitter_control,row=3, col=0, colspan=3)
+
+        control_container = QtWidgets.QWidget()
+        control_layout = QtWidgets.QHBoxLayout(control_container)
+        control_layout.setContentsMargins(8, 8, 8, 6)
+        control_layout.setSpacing(8)
+        control_layout.addWidget(self.display_button, 1)
+        control_layout.addWidget(self.pause_button, 1)
+
+        self.addWidget(display_container, row=0, col=0, colspan=3)
+        self.addWidget(parameters_container, row=1, col=0, colspan=3)
+        self.addWidget(control_container, row=2, col=0, colspan=3)
 
         self.setLayout(self.layout)
 
-    
+
 
     def start_pygame(self):
-        # Run Pygame in a separate thread
-        if len(self.thread_list)==0 :
-            print("is_running : ", self.is_running)
-            self.pygame_thread = threading.Thread(target=self.run_pygame, args=(
-                self.stim_width, self.stim_spacing, self.stim_speed, self.stim_switch_frequency, self.stim_pattern, self.stim_mode, self.stim_direction, self.is_running, self.update_gui))
+        if self.display_button.isChecked():
+            if len(self.thread_list) > 0:
+                return
+
+            self.is_running = True
+            self.update_values()
+
+            self.pygame_thread = threading.Thread(
+                target=self.run_pygame,
+                args=(
+                    self.stim_width,
+                    self.stim_spacing,
+                    self.stim_speed,
+                    self.stim_switch_frequency,
+                    self.stim_pattern,
+                    self.stim_mode,
+                    self.stim_direction,
+                    self.is_running,
+                    self.update_gui,
+                )
+            )
+            self.pygame_thread.daemon = True
             self.pygame_thread.start()
-            
             self.thread_list.append(self.pygame_thread)
-        else :
-            # self.pause_stim()
-            if self.pygame_thread and self.pygame_thread.is_alive():
-                self.is_running=False
-                # If necessary, you could join the thread or signal it to exit
-                self.terminate_pygame_thread()  # You should implement this method
-                self.pygame_thread.join()
-                self.thread_list.clear()
-            # self.save_values()
-            self.is_running=True
-                
+
+        else:
+            self.is_running = False
+            try:
+                pygame.event.post(pygame.event.Event(pygame.QUIT))
+            except Exception:
+                pass
+
+    def cleanup_pygame_thread(self):
+        self.thread_list.clear()
+        self.is_running = True
+
+        self.display_button.blockSignals(True)
+        self.display_button.setChecked(False)
+        self.display_button.blockSignals(False)
+
+        print("Optostimulation window stopped, ready to restart")
 
     def terminate_pygame_thread(self):
-        # Implement a safe way to stop the 'run_pygame' loop
-        # You can use an event or a flag inside 'run_pygame' to exit its loop
-        pass    
+        self.is_running = False
+        try:
+            pygame.event.post(pygame.event.Event(pygame.QUIT))
+        except Exception:
+            pass
 
     def toggle_stim(self):
         if self.stim_speed.value==0:
@@ -239,7 +260,7 @@ class UIOptostim(pg.LayoutWidget):
     def save_values(self):
         filePath,_ = QtWidgets.QFileDialog.getSaveFileName(self,"Save optostim values", "", ".csv") 
         csvResult=csv.writer(open(filePath+".csv","w",newline=''))
-        csvResult.writerow(['timestamp','width','spacing','speed','switch_frequency','pattern','mode','direction','direction_value'])
+        csvResult.writerow(['timestamp','pattern','width','spacing','speed','switch_frequency','duration_cycle','duration_enabled','mode','direction','direction_value'])
         for i in range(len(self.stim_results_list)):
             csvResult.writerow(self.stim_results_list[i])
 
@@ -257,18 +278,20 @@ class UIOptostim(pg.LayoutWidget):
             self.stim_spacing.value = int(self.stim_spacing_input.text())
             self.stim_speed.value = int(self.stim_speed_input.text())
             self.stim_switch_frequency.value = int(self.stim_switch_frequency_input.text())
+            self.stim_duration_cycle.value = int(self.stim_duration_input.text())
             self.stim_pattern.value = self.stim_pattern_input.currentText()
             self.stim_mode.value = self.stim_mode_input.currentText()
             # timestamp=datetime.now().timestamp()
             # self.stim_signal.emit(timestamp,self.stim_speed.value,self.stim_direction.value)
             timestamp= time.perf_counter()
             self.stim_results_list.append([timestamp,
-                                     self.stim_pattern.value,      
+                                     self.stim_pattern.value,
                                      self.stim_width.value,
                                      self.stim_spacing.value,
                                      self.stim_speed.value,
                                      self.stim_switch_frequency.value,
-                                     self.stim_pattern.value,
+                                     self.stim_duration_cycle.value,
+                                     self.stim_duration_ckb.isChecked(),
                                      self.stim_mode.value,
                                      self.stim_direction_input.currentText(),
                                      self.stim_direction.value])
@@ -284,6 +307,7 @@ class UIOptostim(pg.LayoutWidget):
         self.stim_spacing_input.setText(str(self.stim_spacing.value))
         self.stim_speed_input.setText(str(self.stim_speed.value))
         self.stim_switch_frequency_input.setText(str(self.stim_switch_frequency.value))
+        self.stim_duration_input.setText(str(self.stim_duration_cycle.value))
         if self.stim_direction.value == 1 :
             self.stim_direction_input.setCurrentText("Right")
         else:
@@ -291,12 +315,13 @@ class UIOptostim(pg.LayoutWidget):
         
         timestamp= time.perf_counter()
         self.stim_results_list.append([timestamp,
-                                 self.stim_pattern.value,        
+                                 self.stim_pattern.value,
                                  self.stim_width.value,
                                  self.stim_spacing.value,
                                  self.stim_speed.value,
                                  self.stim_switch_frequency.value,
-                                 self.stim_pattern.value,
+                                 self.stim_duration_cycle.value,
+                                 self.stim_duration_ckb.isChecked(),
                                  self.stim_mode.value,
                                  self.stim_direction_input.currentText(),
                                  self.stim_direction.value])
@@ -349,6 +374,8 @@ class UIOptostim(pg.LayoutWidget):
         # is_running.value = True
         line_position = 0
         last_switch_time = pygame.time.get_ticks()  # Get the current time
+        cycle = 0
+        clock = pygame.time.Clock()
     
         while self.is_running :
             for event in pygame.event.get():
@@ -359,6 +386,18 @@ class UIOptostim(pg.LayoutWidget):
                     screen_width = event.w
                     screen_height = event.h
                     screen = pygame.display.set_mode((screen_width, screen_height), pygame.RESIZABLE)
+
+            try:
+                duration_enabled = self.stim_duration_ckb.isChecked()
+                duration_cycle = int(self.stim_duration_input.text())
+            except ValueError:
+                duration_enabled = False
+                duration_cycle = 0
+
+            if duration_enabled and cycle >= duration_cycle:
+                print("Optostimulation duration cycle reached")
+                self.is_running = False
+                break
     
             # Calculate number of lines to fit the screen
             try:
@@ -433,19 +472,22 @@ class UIOptostim(pg.LayoutWidget):
                 if current_time - last_switch_time >= stim_switch_frequency.value * 1000:  # Convert seconds to milliseconds
                     stim_direction.value *= -1  # Reverse direction
                     last_switch_time = current_time  # Reset the timer
-                    if stim_direction.value==1 : direction="Right"
+                    if stim_direction.value==1 :
+                        direction="Right"
+                        cycle += 1
                     else : direction="Left"
                     # print(stim_width.value, stim_spacing.value, stim_speed.value, stim_switch_frequency.value, str(stim_pattern.value), str(stim_mode.value), direction)
                     self.stim_signal.emit(stim_width.value, stim_spacing.value, stim_speed.value, stim_switch_frequency.value, str(stim_pattern.value), str(stim_mode.value), direction)
             # print(stim_speed.value)
             # Cap the frame rate
-            pygame.time.Clock().tick(60)
+            clock.tick(60)
             
             # if self.start_button.text()=="start":
             #     self.is_running=False
     
         # Properly quit pygame
         pygame.quit()
+        self.pygame_finished.emit()
 
 
 
