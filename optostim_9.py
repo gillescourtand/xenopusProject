@@ -459,27 +459,39 @@ class UIOptostim(pg.LayoutWidget):
             pygame.display.flip()
             
       
-            # Move the lines or points
-            line_position += stim_speed.value * stim_direction.value
-            if stim_pattern.value != 'Random dots':
-                line_position %= (stim_width.value + stim_spacing.value)
-    
-            # Check if it's time to switch direction
             current_time = pygame.time.get_ticks()
-            if stim_mode.value=="Continue":
-                last_switch_time = current_time  # Reset the timer
-            else :
-                if current_time - last_switch_time >= stim_switch_frequency.value * 1000:  # Convert seconds to milliseconds
-                    stim_direction.value *= -1  # Reverse direction
-                    last_switch_time = current_time  # Reset the timer
-                    if stim_direction.value==1 :
-                        direction="Right"
-                        cycle += 1
-                    else : direction="Left"
-                    # print(stim_width.value, stim_spacing.value, stim_speed.value, stim_switch_frequency.value, str(stim_pattern.value), str(stim_mode.value), direction)
-                    self.stim_signal.emit(stim_width.value, stim_spacing.value, stim_speed.value, stim_switch_frequency.value, str(stim_pattern.value), str(stim_mode.value), direction)
-            # print(stim_speed.value)
-            # Cap the frame rate
+            paused = (stim_speed.value == 0)
+
+            if paused:
+                last_switch_time = current_time
+            else:
+                line_position += stim_speed.value * stim_direction.value
+                if stim_pattern.value != 'Random dots':
+                    line_position %= (stim_width.value + stim_spacing.value)
+
+                if stim_mode.value == "Continue":
+                    last_switch_time = current_time
+                else:
+                    if current_time - last_switch_time >= stim_switch_frequency.value * 1000:
+                        stim_direction.value *= -1
+                        last_switch_time = current_time
+
+                        if stim_direction.value == 1:
+                            direction = "Right"
+                            cycle += 1
+                        else:
+                            direction = "Left"
+
+                        self.stim_signal.emit(
+                            stim_width.value,
+                            stim_spacing.value,
+                            stim_speed.value,
+                            stim_switch_frequency.value,
+                            str(stim_pattern.value),
+                            str(stim_mode.value),
+                            direction
+                        )
+
             clock.tick(60)
             
             # if self.start_button.text()=="start":

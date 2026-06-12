@@ -412,17 +412,50 @@ class AppController(object):
             if opto is None:
                 return {
                     "active": False,
+                    "paused": False,
                     "timestamp": time.perf_counter(),
                 }
 
+            speed = self._read_value(getattr(opto, "stim_speed", None), 0)
+            window_active = False
+
+            try:
+                if hasattr(opto, "display_button"):
+                    window_active = bool(opto.display_button.isChecked())
+            except Exception:
+                window_active = False
+
+            try:
+                thread_active = len(getattr(opto, "thread_list", [])) > 0
+            except Exception:
+                thread_active = False
+
+            active = window_active or thread_active
+
+            try:
+                pause_text = opto.pause_button.text().strip().lower()
+            except Exception:
+                pause_text = ""
+
+            try:
+                speed_value = int(speed)
+            except Exception:
+                speed_value = 0
+
+            paused = active and (speed_value == 0 or pause_text == "start")
+
             return {
-                "active": bool(getattr(opto, "stimulation", False)),
+                "active": active,
+                "paused": paused,
                 "timestamp": time.perf_counter(),
 
                 "width": self._read_value(getattr(opto, "stim_width", None), 0),
                 "spacing": self._read_value(getattr(opto, "stim_spacing", None), 0),
-                "speed": self._read_value(getattr(opto, "stim_speed", None), 0),
+                "speed": speed,
                 "frequency": self._read_value(getattr(opto, "stim_switch_frequency", None), 0),
+                "duration_cycle": self._read_value(getattr(opto, "stim_duration_cycle", None), 0),
+                "duration_enabled": bool(opto.stim_duration_ckb.isChecked())
+                if hasattr(opto, "stim_duration_ckb") else False,
 
                 "pattern": self._read_value(getattr(opto, "stim_pattern", None), ""),
                 "mode": self._read_value(getattr(opto, "stim_mode", None), ""),
