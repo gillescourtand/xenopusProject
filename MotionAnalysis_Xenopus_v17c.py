@@ -701,41 +701,15 @@ class TailArcROI(object):
 
         self.center = root.copy()
 
-        # Distance root -> tail actuelle
-        tail_distance = max(1.0, float(length))
-
-        # Distance de l'arc par rapport au root :
-        # + 1/4 de la hauteur de l'image vers la gauche
-        root_gap = max(
-            tail_distance + img_h * 0.25,
-            img_h * 0.48
-        )
-
-        # Épaisseur de l'arc
-        arc_width = max(
-            42.0,
-            img_h * 0.085
-        )
+        root_gap = max(170.0, img_h * 0.38)
+        arc_width = max(42.0, img_h * 0.085)
 
         self.inner_radius = root_gap
         self.outer_radius = root_gap + arc_width
 
-        # Hauteur visée de l'arc par rapport à la hauteur de l'image
-        target_arc_height = img_h * 0.82
-
-        # Calcule l'ouverture nécessaire pour obtenir cette hauteur
-        half_angle = math.asin(
-            min(0.95, target_arc_height / (2.0 * self.outer_radius))
-        )
-
-        # Sécurité : évite un arc trop ouvert
-        half_angle = max(
-            math.radians(25.0),
-            min(math.radians(55.0), half_angle)
-        )
-
-        self.start_angle = angle_mid - half_angle
-        self.end_angle = angle_mid + half_angle
+        # Ouverture un peu plus grande pour une zone plus haute.
+        self.start_angle = angle_mid - math.radians(60.0)
+        self.end_angle = angle_mid + math.radians(60.0)
 
         self.initialized = True
         self._dirty_version += 1
@@ -747,9 +721,9 @@ class TailArcROI(object):
 
         try:
             ui.tailArcCurve_slider.blockSignals(True)
-            ui.tailArcCurve_slider.setValue(10)
+            ui.tailArcCurve_slider.setValue(40)
             ui.tailArcCurve_slider.blockSignals(False)
-            self.set_curve_value(10)
+            self.set_curve_value(40)
         except Exception:
             pass
 
@@ -1335,7 +1309,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.threshEye2_slider.valueChanged.connect((lambda value,idx=1 : self.threshEyeValue_change(value,idx)))
 
         self.threshTail_slider.setValue(90)
-        self.tailArcCurve_slider.setValue(10)
+        self.tailArcCurve_slider.setValue(40)
         self.threshEye1_slider.setValue(60)
         self.threshEye2_slider.setValue(60)
 
@@ -1406,15 +1380,91 @@ class UIXenopus(QtWidgets.QMainWindow):
         actionLayout.addWidget(self.track_checkBox, 2)
         actionLayout.addWidget(secondaryButtons, 1)
 
-        self.w8.addWidget(self.manipType_comboBox, row=0, col=0)
-        self.w8.addWidget(self.label8, row=1, col=0)
-        self.w8.addWidget(splitter_Background, row=1,col=1,colspan=2)
-        self.w8.addWidget(splitter_Selection, row=2, col=0,rowspan=4)
-        self.w8.addWidget(splitter_ThreshEyes, row=2, col=1,colspan=3)
-        self.w8.addWidget(splitter_ThreshTail, row=3, col=1,colspan=3)
+        # ------------------------------------------------------------------
+        # Panel ROI / segmentation : layout plus propre et plus lisible
+        # ------------------------------------------------------------------
+        self.w8.setContentsMargins(8, 6, 8, 6)
 
-        self.w8.addWidget(splitter_Output, row=4, col=1, colspan=3)
-        self.w8.addWidget(actionPanel, row=5, col=1, colspan=3, rowspan=2)
+        modeGroup = QtWidgets.QGroupBox("Mode")
+        modeLayout = QtWidgets.QVBoxLayout(modeGroup)
+        modeLayout.setContentsMargins(8, 8, 8, 8)
+        modeLayout.setSpacing(6)
+        modeLayout.addWidget(self.manipType_comboBox)
+
+        selectionGroup = QtWidgets.QGroupBox("Selection")
+        selectionLayout = QtWidgets.QVBoxLayout(selectionGroup)
+        selectionLayout.setContentsMargins(8, 8, 8, 8)
+        selectionLayout.setSpacing(6)
+        selectionLayout.addWidget(self.selectEyes_radioButton)
+        selectionLayout.addWidget(self.selectTailRoot_radioButton)
+        selectionLayout.addWidget(self.selectLimbs_radioButton)
+        selectionLayout.addWidget(self.selectExclusion_radioButton)
+
+        bgGroup = QtWidgets.QGroupBox("Background")
+        bgLayout = QtWidgets.QHBoxLayout(bgGroup)
+        bgLayout.setContentsMargins(8, 8, 8, 8)
+        bgLayout.setSpacing(18)
+        bgLayout.addWidget(self.whiteBgd_radioButton)
+        bgLayout.addWidget(self.blackBgd_radioButton)
+        bgLayout.addStretch(1)
+
+        eyesGroup = QtWidgets.QGroupBox("Eyes")
+        eyesLayout = QtWidgets.QVBoxLayout(eyesGroup)
+        eyesLayout.setContentsMargins(8, 8, 8, 8)
+        eyesLayout.setSpacing(6)
+        eyesLayout.addWidget(splitter_ThreshEyes)
+
+        tailGroup = QtWidgets.QGroupBox("Tail")
+        tailLayout = QtWidgets.QVBoxLayout(tailGroup)
+        tailLayout.setContentsMargins(8, 8, 8, 8)
+        tailLayout.setSpacing(6)
+        tailLayout.addWidget(splitter_ThreshTail)
+
+        outputGroup = QtWidgets.QGroupBox("Output")
+        outputLayout = QtWidgets.QVBoxLayout(outputGroup)
+        outputLayout.setContentsMargins(8, 8, 8, 8)
+        outputLayout.setSpacing(6)
+        outputLayout.addWidget(splitter_Output)
+
+        actionsGroup = QtWidgets.QGroupBox("Actions")
+        actionsLayout = QtWidgets.QVBoxLayout(actionsGroup)
+        actionsLayout.setContentsMargins(8, 8, 8, 8)
+        actionsLayout.setSpacing(6)
+        actionsLayout.addWidget(self.track_checkBox)
+        actionsLayout.addWidget(initLimbTrack_btn)
+        actionsLayout.addWidget(resetPlots_btn)
+        actionsLayout.addWidget(resetBuffer_btn)
+
+        # Petit style local : plus d'air, sans toucher au thème global Imagys.
+        panelStyle = """
+        QGroupBox {
+            font-weight: bold;
+            border: 1px solid #b8b8d8;
+            border-radius: 6px;
+            margin-top: 8px;
+            padding-top: 8px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 8px;
+            padding: 0 4px;
+        }
+        QPushButton {
+            min-height: 26px;
+        }
+        """
+        for group in [modeGroup, selectionGroup, bgGroup, eyesGroup, tailGroup, outputGroup, actionsGroup]:
+            group.setStyleSheet(panelStyle)
+
+        self.w8.addWidget(modeGroup, row=0, col=0)
+        self.w8.addWidget(selectionGroup, row=1, col=0, rowspan=3)
+
+        self.w8.addWidget(bgGroup, row=0, col=1, colspan=2)
+        self.w8.addWidget(eyesGroup, row=1, col=1, colspan=2)
+        self.w8.addWidget(tailGroup, row=2, col=1, colspan=2)
+        self.w8.addWidget(outputGroup, row=3, col=1, colspan=2)
+
+        self.w8.addWidget(actionsGroup, row=0, col=3, rowspan=4)
 
         self.d8.addWidget(self.w8)
 
