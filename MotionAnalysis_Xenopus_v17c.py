@@ -568,6 +568,7 @@ class TailArcROI(object):
 
         self._dirty_version = 0
         self._curve_reference = None
+        self._last_curve_value = 50.0
 
         self.fill_item = QtWidgets.QGraphicsPathItem()
         self.fill_item.setPen(pg.mkPen(color=(40, 140, 255), width=1))
@@ -633,6 +634,7 @@ class TailArcROI(object):
         self._dirty_version += 1
 
         self._save_curve_reference()
+        self._last_curve_value = 50.0
         self.set_visible(True)
         self.update_graph()
 
@@ -657,49 +659,81 @@ class TailArcROI(object):
             "sign": 1.0 if _angle_delta_signed(self.start_angle, self.end_angle) >= 0 else -1.0,
         }
 
+    def _update_curve_reference_width_only(self):
+        """
+        Quand on bouge R1/R2, on change seulement l'épaisseur de l'arc.
+        On ne ré-écrit pas mid_radius / arc_length, sinon le slider curve perd son amplitude.
+        """
+        if self._curve_reference is None:
+            self._save_curve_reference()
+            return
+
+        width = max(2.0, self.outer_radius - self.inner_radius)
+        self._curve_reference["width"] = float(width)
+
+    def _curve_scale_from_value(self, value):
+        value = max(0.0, min(100.0, float(value)))
+
+        if value <= 50.0:
+            # 50 -> x1, 0 -> x4 : plus droit
+            return 1.0 + ((50.0 - value) / 50.0) * 3.0
+
+        # 50 -> x1, 100 -> x0.5 : plus courbé
+        return 1.0 - ((value - 50.0) / 50.0) * 0.5
+
     def set_curve_value(self, value):
         """
-        Réglage de l'arrondi.
-        value = 50 : courbure initiale
-        value < 50 : arc plus droit
-        value > 50 : arc plus courbé
+        Réglage de l'arrondi SANS repositionner au point de départ.
+        On transforme la géométrie actuelle, pas une ancienne référence sauvegardée.
         """
         if not self.initialized:
             return
 
-        if self._curve_reference is None:
-            self._save_curve_reference()
-
         value = max(0.0, min(100.0, float(value)))
-        ref = self._curve_reference
 
-        if value <= 50.0:
-            # 50 -> x1, 0 -> x4 : beaucoup plus droit
-            scale = 1.0 + ((50.0 - value) / 50.0) * 3.0
-        else:
-            # 50 -> x1, 100 -> x0.5 : plus courbé
-            scale = 1.0 - ((value - 50.0) / 50.0) * 0.5
+        previous_value = getattr(self, "_last_curve_value", 50.0)
 
-        new_mid_radius = max(ref["width"] / 2.0 + 2.0, ref["mid_radius"] * scale)
+        previous_scale = self._curve_scale_from_value(previous_value)
+        new_scale = self._curve_scale_from_value(value)
 
-        mid_angle = ref["mid_angle"]
+        if previous_scale <= 0:
+            previous_scale = 1.0
+
+        ratio = new_scale / previous_scale
+
+        mid_angle = self._angle_mid()
+        mid_radius = max(1.0, (self.inner_radius + self.outer_radius) / 2.0)
+        width = max(2.0, self.outer_radius - self.inner_radius)
+
+        delta = _angle_delta_signed(self.start_angle, self.end_angle)
+        sign = 1.0 if delta >= 0 else -1.0
+        delta_abs = max(math.radians(3.0), abs(delta))
+
         direction = np.array([math.cos(mid_angle), math.sin(mid_angle)], dtype=float)
+        mid_point = self.center + mid_radius * direction
 
-        # On garde le milieu de la zone au même endroit, et on déplace le centre du cercle.
-        self.center = ref["mid_point"] - new_mid_radius * direction
+        # Longueur actuelle de l'arc au milieu de l'épaisseur.
+        # On la conserve pour que l'arc se courbe/décourbe sans sauter.
+        arc_length = mid_radius * delta_abs
 
-        self.inner_radius = max(2.0, new_mid_radius - ref["width"] / 2.0)
-        self.outer_radius = self.inner_radius + ref["width"]
+        new_mid_radius = max(width / 2.0 + 2.0, mid_radius * ratio)
 
-        new_delta = ref["arc_length"] / max(new_mid_radius, 1.0)
+        self.center = mid_point - new_mid_radius * direction
+
+        self.inner_radius = max(2.0, new_mid_radius - width / 2.0)
+        self.outer_radius = self.inner_radius + width
+
+        new_delta = arc_length / max(new_mid_radius, 1.0)
         new_delta = max(math.radians(3.0), min(math.radians(170.0), new_delta))
-        new_delta *= ref["sign"]
+        new_delta *= sign
 
         self.start_angle = mid_angle - new_delta / 2.0
         self.end_angle = mid_angle + new_delta / 2.0
 
+        self._last_curve_value = value
         self._dirty_version += 1
         self.update_graph()
+
 
     def get_parameters(self):
         return {
@@ -763,24 +797,46 @@ class TailArcROI(object):
     def _handle_moved(self, index, pos):
         try:
             if index == 0:
-                # R1 : rayon interne
+                # R1 : rayon interne.
+                # On change seulement l'épaisseur, pas la référence de courbure.
                 self.inner_radius = max(2.0, np.linalg.norm(pos - self.center))
                 if self.inner_radius >= self.outer_radius - 2.0:
                     self.inner_radius = self.outer_radius - 2.0
 
+                self._update_curve_reference_width_only()
+
             elif index == 1:
-                # R2 : rayon externe
+                # R2 : rayon externe.
+                # On change seulement l'épaisseur, pas la référence de courbure.
                 self.outer_radius = max(self.inner_radius + 2.0, np.linalg.norm(pos - self.center))
 
+                self._update_curve_reference_width_only()
+
             elif index == 2:
-                # A : bord angulaire 1
+                # A : bord angulaire 1.
+                # Là oui, on redéfinit la forme de base.
                 self.start_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+                self._save_curve_reference()
+
+                try:
+                    ui.tailArcCurve_slider.blockSignals(True)
+                    ui.tailArcCurve_slider.setValue(50)
+                    ui.tailArcCurve_slider.blockSignals(False)
+                except Exception:
+                    pass
 
             elif index == 3:
-                # B : bord angulaire 2
+                # B : bord angulaire 2.
+                # Là oui, on redéfinit la forme de base.
                 self.end_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+                self._save_curve_reference()
 
-            self._save_curve_reference()
+                try:
+                    ui.tailArcCurve_slider.blockSignals(True)
+                    ui.tailArcCurve_slider.setValue(50)
+                    ui.tailArcCurve_slider.blockSignals(False)
+                except Exception:
+                    pass
 
             self._dirty_version += 1
             self.update_graph()
