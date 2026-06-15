@@ -756,31 +756,31 @@ class TailArcROI(object):
         end_handle = self.center + self.outer_radius * np.array([math.cos(self.end_angle), math.sin(self.end_angle)])
 
         self.handles.set_positions(
-            [self.center, inner_mid, outer_mid, start_handle, end_handle],
-            ["C", "R1", "R2", "A", "B"]
+            [inner_mid, outer_mid, start_handle, end_handle],
+            ["R1", "R2", "A", "B"]
         )
 
     def _handle_moved(self, index, pos):
         try:
             if index == 0:
-                self.center = pos
-
-            elif index == 1:
+                # R1 : rayon interne
                 self.inner_radius = max(2.0, np.linalg.norm(pos - self.center))
                 if self.inner_radius >= self.outer_radius - 2.0:
                     self.inner_radius = self.outer_radius - 2.0
 
-            elif index == 2:
+            elif index == 1:
+                # R2 : rayon externe
                 self.outer_radius = max(self.inner_radius + 2.0, np.linalg.norm(pos - self.center))
 
-            elif index == 3:
+            elif index == 2:
+                # A : bord angulaire 1
                 self.start_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
 
-            elif index == 4:
+            elif index == 3:
+                # B : bord angulaire 2
                 self.end_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
 
-            if index != 0:
-                self._save_curve_reference()
+            self._save_curve_reference()
 
             self._dirty_version += 1
             self.update_graph()
