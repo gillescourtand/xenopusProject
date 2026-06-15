@@ -472,7 +472,8 @@ class TailArcHandleGraph(pg.GraphItem):
             "data": np.empty(0, dtype=[("index", int)])
         }
 
-    def set_positions(self, positions, labels):
+    def set_positions(self, positions, labels=None):
+        # Labels masqués volontairement : on garde seulement les petits points.
         for item in self.textItems:
             try:
                 item.scene().removeItem(item)
@@ -488,19 +489,12 @@ class TailArcHandleGraph(pg.GraphItem):
 
         self.updateGraph()
 
-        for label, point in zip(labels, pos):
-            text = pg.TextItem(label, color=(80, 180, 255))
-            text.setZValue(1000)
-            text.setParentItem(self)
-            text.setPos(point[0], point[1])
-            self.textItems.append(text)
-
     def updateGraph(self):
         pg.GraphItem.setData(
             self,
             pos=self.data["pos"],
             data=self.data["data"],
-            size=7,
+            size=8,
             symbol="o",
             symbolBrush=(40, 140, 255, 230),
             symbolPen=pg.mkPen("w", width=1),
@@ -550,6 +544,59 @@ class TailArcHandleGraph(pg.GraphItem):
         ev.accept()
 
 
+
+class TailArcFillItem(QtWidgets.QGraphicsPathItem):
+    """
+    Zone bleue cliquable : permet de déplacer tout l'arc par clic-glissé.
+    """
+    def __init__(self, roi):
+        QtWidgets.QGraphicsPathItem.__init__(self)
+        self.roi = roi
+        self._last_pos = None
+        self.setAcceptedMouseButtons(Qt.LeftButton)
+        self.setAcceptHoverEvents(True)
+        # curseur normal, pour ne pas gêner le clic sur les points
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            # Si on clique près d'une poignée R1/R2/A/B, on laisse passer le clic au GraphItem.
+            # Sinon le remplissage bleu peut passer par-dessus et empêcher de prendre les points.
+            try:
+                p = ev.pos()
+                handle_positions = getattr(self.roi.handles, "data", {}).get("pos", [])
+                for hp in handle_positions:
+                    dx = float(hp[0]) - float(p.x())
+                    dy = float(hp[1]) - float(p.y())
+                    if (dx * dx + dy * dy) <= (14.0 * 14.0):
+                        ev.ignore()
+                        return
+            except Exception:
+                pass
+
+            self._last_pos = ev.pos()
+            # curseur normal
+            ev.accept()
+        else:
+            QtWidgets.QGraphicsPathItem.mousePressEvent(self, ev)
+
+    def mouseMoveEvent(self, ev):
+        if self._last_pos is None:
+            QtWidgets.QGraphicsPathItem.mouseMoveEvent(self, ev)
+            return
+
+        pos = ev.pos()
+        delta = pos - self._last_pos
+        self._last_pos = pos
+
+        self.roi.move_by(delta.x(), delta.y())
+        ev.accept()
+
+    def mouseReleaseEvent(self, ev):
+        self._last_pos = None
+        # curseur normal, pour ne pas gêner le clic sur les points
+        ev.accept()
+
+
 class TailArcROI(object):
     """
     ROI arc pour la queue.
@@ -570,7 +617,7 @@ class TailArcROI(object):
         self._curve_reference = None
         self._last_curve_value = 50.0
 
-        self.fill_item = QtWidgets.QGraphicsPathItem()
+        self.fill_item = TailArcFillItem(self)
         self.fill_item.setPen(pg.mkPen(color=(40, 140, 255), width=1))
         self.fill_item.setBrush(QtgGui.QBrush(QtgGui.QColor(40, 140, 255, 45)))
 
@@ -583,18 +630,20 @@ class TailArcROI(object):
         self.side_curve_2 = pg.PlotDataItem(x=[], y=[], pen=side_pen)
         self.handles = TailArcHandleGraph(on_change=self._handle_moved)
 
+        self.fill_item.setZValue(800)
+        self.plot_view.addItem(self.fill_item)
+
         for item in [
-            self.fill_item,
             self.inner_curve,
             self.outer_curve,
             self.side_curve_1,
             self.side_curve_2,
-            self.handles,
         ]:
             item.setZValue(900)
             self.plot_view.addItem(item)
 
-        self.handles.setZValue(950)
+        self.handles.setZValue(2000)
+        self.plot_view.addItem(self.handles)
         self.set_visible(False)
 
     def set_visible(self, visible):
@@ -607,6 +656,15 @@ class TailArcROI(object):
             self.handles,
         ]:
             item.setVisible(visible)
+
+    def move_by(self, dx, dy):
+        self.center = self.center + np.array([float(dx), float(dy)], dtype=float)
+
+        if self._curve_reference is not None:
+            self._curve_reference["mid_point"] = self._curve_reference["mid_point"] + np.array([float(dx), float(dy)], dtype=float)
+
+        self._dirty_version += 1
+        self.update_graph()
 
     def initialize_from_points(self, root, nose, tail):
         root = np.asarray(root, dtype=float)
@@ -798,7 +856,6 @@ class TailArcROI(object):
         try:
             if index == 0:
                 # R1 : rayon interne.
-                # On change seulement l'épaisseur, pas la référence de courbure.
                 self.inner_radius = max(2.0, np.linalg.norm(pos - self.center))
                 if self.inner_radius >= self.outer_radius - 2.0:
                     self.inner_radius = self.outer_radius - 2.0
@@ -807,16 +864,25 @@ class TailArcROI(object):
 
             elif index == 1:
                 # R2 : rayon externe.
-                # On change seulement l'épaisseur, pas la référence de courbure.
                 self.outer_radius = max(self.inner_radius + 2.0, np.linalg.norm(pos - self.center))
 
                 self._update_curve_reference_width_only()
 
             elif index == 2:
                 # A : bord angulaire 1.
-                # Là oui, on redéfinit la forme de base.
-                self.start_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+                # Agrandissement symétrique : B bouge en miroir autour de l'axe central.
+                mid_angle = self._angle_mid()
+                moved_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+
+                half_width = abs(_angle_delta_signed(mid_angle, moved_angle))
+                half_width = max(math.radians(3.0), min(math.radians(85.0), half_width))
+
+                sign = 1.0 if _angle_delta_signed(self.start_angle, self.end_angle) >= 0 else -1.0
+
+                self.start_angle = mid_angle - sign * half_width
+                self.end_angle = mid_angle + sign * half_width
                 self._save_curve_reference()
+                self._last_curve_value = 50.0
 
                 try:
                     ui.tailArcCurve_slider.blockSignals(True)
@@ -827,9 +893,19 @@ class TailArcROI(object):
 
             elif index == 3:
                 # B : bord angulaire 2.
-                # Là oui, on redéfinit la forme de base.
-                self.end_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+                # Agrandissement symétrique : A bouge en miroir autour de l'axe central.
+                mid_angle = self._angle_mid()
+                moved_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+
+                half_width = abs(_angle_delta_signed(mid_angle, moved_angle))
+                half_width = max(math.radians(3.0), min(math.radians(85.0), half_width))
+
+                sign = 1.0 if _angle_delta_signed(self.start_angle, self.end_angle) >= 0 else -1.0
+
+                self.start_angle = mid_angle - sign * half_width
+                self.end_angle = mid_angle + sign * half_width
                 self._save_curve_reference()
+                self._last_curve_value = 50.0
 
                 try:
                     ui.tailArcCurve_slider.blockSignals(True)
