@@ -567,6 +567,7 @@ class TailArcROI(object):
         self.initialized = False
 
         self._dirty_version = 0
+        self._curve_reference = None
 
         self.fill_item = QtWidgets.QGraphicsPathItem()
         self.fill_item.setPen(pg.mkPen(color=(40, 140, 255), width=1))
@@ -631,7 +632,73 @@ class TailArcROI(object):
         self.initialized = True
         self._dirty_version += 1
 
+        self._save_curve_reference()
         self.set_visible(True)
+        self.update_graph()
+
+    def _save_curve_reference(self):
+        mid_angle = self._angle_mid()
+        mid_radius = (self.inner_radius + self.outer_radius) / 2.0
+        width = max(2.0, self.outer_radius - self.inner_radius)
+        delta = abs(_angle_delta_signed(self.start_angle, self.end_angle))
+
+        if delta < math.radians(3.0):
+            delta = math.radians(3.0)
+
+        direction = np.array([math.cos(mid_angle), math.sin(mid_angle)], dtype=float)
+        mid_point = self.center + mid_radius * direction
+
+        self._curve_reference = {
+            "mid_point": mid_point.copy(),
+            "mid_angle": float(mid_angle),
+            "mid_radius": float(mid_radius),
+            "width": float(width),
+            "arc_length": float(mid_radius * delta),
+            "sign": 1.0 if _angle_delta_signed(self.start_angle, self.end_angle) >= 0 else -1.0,
+        }
+
+    def set_curve_value(self, value):
+        """
+        Réglage de l'arrondi.
+        value = 50 : courbure initiale
+        value < 50 : arc plus droit
+        value > 50 : arc plus courbé
+        """
+        if not self.initialized:
+            return
+
+        if self._curve_reference is None:
+            self._save_curve_reference()
+
+        value = max(0.0, min(100.0, float(value)))
+        ref = self._curve_reference
+
+        if value <= 50.0:
+            # 50 -> x1, 0 -> x4 : beaucoup plus droit
+            scale = 1.0 + ((50.0 - value) / 50.0) * 3.0
+        else:
+            # 50 -> x1, 100 -> x0.5 : plus courbé
+            scale = 1.0 - ((value - 50.0) / 50.0) * 0.5
+
+        new_mid_radius = max(ref["width"] / 2.0 + 2.0, ref["mid_radius"] * scale)
+
+        mid_angle = ref["mid_angle"]
+        direction = np.array([math.cos(mid_angle), math.sin(mid_angle)], dtype=float)
+
+        # On garde le milieu de la zone au même endroit, et on déplace le centre du cercle.
+        self.center = ref["mid_point"] - new_mid_radius * direction
+
+        self.inner_radius = max(2.0, new_mid_radius - ref["width"] / 2.0)
+        self.outer_radius = self.inner_radius + ref["width"]
+
+        new_delta = ref["arc_length"] / max(new_mid_radius, 1.0)
+        new_delta = max(math.radians(3.0), min(math.radians(170.0), new_delta))
+        new_delta *= ref["sign"]
+
+        self.start_angle = mid_angle - new_delta / 2.0
+        self.end_angle = mid_angle + new_delta / 2.0
+
+        self._dirty_version += 1
         self.update_graph()
 
     def get_parameters(self):
@@ -711,6 +778,9 @@ class TailArcROI(object):
 
             elif index == 4:
                 self.end_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+
+            if index != 0:
+                self._save_curve_reference()
 
             self._dirty_version += 1
             self.update_graph()
@@ -1035,6 +1105,19 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.threshTail_slider.valueChanged.connect(threshTailValue_label.setNum)
         self.threshTail_slider.valueChanged.connect(self.update_tail_segment_thresh)
 
+        tailArcCurve_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurve_label.setText("curve")
+        self.tailArcCurve_slider = QtWidgets.QSlider(splitter_ThreshTail)
+        self.tailArcCurve_slider.setMinimum(0)
+        self.tailArcCurve_slider.setMaximum(100)
+        self.tailArcCurve_slider.setPageStep(5)
+        self.tailArcCurve_slider.setOrientation(Qt.Horizontal)
+        tailArcCurveValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurveValue_label.setText("50")
+        tailArcCurveValue_label.setAlignment(Qt.AlignCenter)
+        self.tailArcCurve_slider.valueChanged.connect(tailArcCurveValue_label.setNum)
+        self.tailArcCurve_slider.valueChanged.connect(self.update_tail_arc_curve)
+
         splitter_ThreshEyes=QtWidgets.QSplitter()
 
         threshEye1Slider_label = QtWidgets.QLabel(splitter_ThreshEyes)
@@ -1062,6 +1145,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.threshEye2_slider.valueChanged.connect((lambda value,idx=1 : self.threshEyeValue_change(value,idx)))
 
         self.threshTail_slider.setValue(90)
+        self.tailArcCurve_slider.setValue(50)
         self.threshEye1_slider.setValue(60)
         self.threshEye2_slider.setValue(60)
 
@@ -1575,6 +1659,13 @@ class UIXenopus(QtWidgets.QMainWindow):
             msg="no reference for body axe. You can add one with 'tail-root'"
             QtWidgets.QMessageBox.warning(ui,"warning",str(msg),QtWidgets.QMessageBox.Ok)
 
+    def update_tail_arc_curve(self, value):
+        if hasattr(self, "tailArcROI") and self.tailArcROI.initialized:
+            self.tailArcROI.set_curve_value(value)
+
+            if not self.track_checkBox.isChecked() and self.selectTailRoot_radioButton.isChecked()==True:
+                self.update_tail_segment_thresh(self.threshTail_slider.value())
+
     def update_tail_segment_thresh(self,thresh_value):
         if not self.track_checkBox.isChecked() and self.selectTailRoot_radioButton.isChecked()==True:
 
@@ -1591,6 +1682,7 @@ class UIXenopus(QtWidgets.QMainWindow):
                 nose = self.mark.data['pos'][1]
                 tail = self.mark.data['pos'][2]
                 self.tailArcROI.initialize_from_points(tailRoot, nose, tail)
+                self.tailArcROI.set_curve_value(self.tailArcCurve_slider.value())
 
             arc_roi = self.get_tail_arc_roi_params()
 
@@ -1627,6 +1719,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
                 if not self.tailArcROI.initialized:
                     self.tailArcROI.initialize_from_points(tailRoot, nose, tail)
+                    self.tailArcROI.set_curve_value(self.tailArcCurve_slider.value())
                 else:
                     self.tailArcROI.update_graph()
 
