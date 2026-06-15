@@ -330,6 +330,396 @@ def tail_Track(iframe,analysimg,thresh_tail,rgn_tail):
 
     return iframe,tail_pos,tailAngleCorr
 
+
+def _angle_delta_signed(start_angle, end_angle):
+    return (end_angle - start_angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _tail_arc_crop_mask(image_shape, arc_roi):
+    """
+    Crée un masque seulement sur le petit carré autour de l'arc.
+    Pas sur toute l'image : important pour garder le temps réel.
+    """
+    img_height, img_width = image_shape[:2]
+
+    cx, cy = arc_roi["center"]
+    cx = float(cx)
+    cy = float(cy)
+
+    inner_radius = max(1.0, float(arc_roi["inner_radius"]))
+    outer_radius = max(inner_radius + 1.0, float(arc_roi["outer_radius"]))
+
+    start_angle = float(arc_roi["start_angle"])
+    end_angle = float(arc_roi["end_angle"])
+
+    margin = 3
+
+    x0 = max(0, int(cx - outer_radius - margin))
+    x1 = min(img_width, int(cx + outer_radius + margin + 1))
+
+    # Coordonnées pyqtgraph -> OpenCV : y_cv = img_height - y_plot.
+    y_plot_min = cy - outer_radius - margin
+    y_plot_max = cy + outer_radius + margin
+
+    y0 = max(0, int(img_height - y_plot_max))
+    y1 = min(img_height, int(img_height - y_plot_min + 1))
+
+    if x1 <= x0 or y1 <= y0:
+        return None, None
+
+    yy, xx = np.indices((y1 - y0, x1 - x0), dtype=np.float32)
+    xx += x0
+
+    # y en repère pyqtgraph.
+    y_plot = img_height - (yy + y0)
+
+    dx = xx - cx
+    dy = y_plot - cy
+
+    radius = np.sqrt(dx * dx + dy * dy)
+    angle = np.arctan2(dy, dx)
+
+    delta_total = _angle_delta_signed(start_angle, end_angle)
+    delta_pixel = (angle - start_angle + math.pi) % (2.0 * math.pi) - math.pi
+
+    if delta_total >= 0:
+        angle_ok = (delta_pixel >= 0) & (delta_pixel <= delta_total)
+    else:
+        angle_ok = (delta_pixel <= 0) & (delta_pixel >= delta_total)
+
+    radius_ok = (radius >= inner_radius) & (radius <= outer_radius)
+
+    mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+    mask[radius_ok & angle_ok] = 255
+
+    return (x0, y0, x1, y1), mask
+
+
+def tail_Track_arc_fast(iframe, analysimg, thresh_tail, arc_roi):
+    """
+    Même principe que tail_Track(), mais zone = arc.
+    Optimisé : on ne traite que le crop autour de l'arc, pas toute l'image.
+    """
+    if analysimg is None or arc_roi is None:
+        return iframe, [0, 0], 180
+
+    if len(analysimg.shape) > 2:
+        gray = cv2.cvtColor(analysimg, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = analysimg
+
+    im_height = gray.shape[0]
+
+    crop_box, arc_mask = _tail_arc_crop_mask(gray.shape, arc_roi)
+
+    if crop_box is None:
+        return iframe, [0, 0], 180
+
+    x0, y0, x1, y1 = crop_box
+    crop = gray[y0:y1, x0:x1]
+
+    threshTailZone = cv2.threshold(crop, thresh_tail, 255, cv2.THRESH_BINARY_INV)[1]
+    threshTailZone = cv2.bitwise_and(threshTailZone, threshTailZone, mask=arc_mask)
+    threshTailZone = cv2.dilate(threshTailZone, None, iterations=5)
+
+    tailcnts = cv2.findContours(
+        threshTailZone.copy(),
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )[-2]
+
+    if tailcnts:
+        ctail = sorted(tailcnts, key=cv2.contourArea, reverse=True)[:1]
+        M = cv2.moments(ctail[0])
+
+        if M["m00"] == 0:
+            return iframe, [0, 0], 180
+
+        tailX_local = int(M["m10"] / M["m00"])
+        tailY_local = int(M["m01"] / M["m00"])
+
+        ctailX = tailX_local + x0
+        ctailY = int(im_height) - (tailY_local + y0)
+
+        rootx, rooty = ui.mark.data['pos'][0]
+
+        tailAngle = ((math.atan2((rooty - ctailY), (rootx - ctailX))) * 180 / math.pi) * (-1)
+        tailAngleCorr = tailAngle + varM.bodyAngle
+
+    else:
+        print("tail detection failed")
+        tailAngleCorr = 180
+        ctailX = 0
+        ctailY = 0
+
+    tail_pos = [ctailX, ctailY]
+
+    ui.tailAngleList.append([iframe, tailAngleCorr])
+    ui.tailPosList.append([iframe, tail_pos])
+
+    return iframe, tail_pos, tailAngleCorr
+
+
+class TailArcHandleGraph(pg.GraphItem):
+    def __init__(self, on_change=None):
+        pg.GraphItem.__init__(self)
+        self.on_change = on_change
+        self.dragPoint = None
+        self.dragOffset = None
+        self.textItems = []
+        self.data = {
+            "pos": np.empty((0, 2), dtype=float),
+            "data": np.empty(0, dtype=[("index", int)])
+        }
+
+    def set_positions(self, positions, labels):
+        for item in self.textItems:
+            try:
+                item.scene().removeItem(item)
+            except Exception:
+                pass
+
+        self.textItems = []
+
+        pos = np.asarray(positions, dtype=float)
+        data = np.empty(len(pos), dtype=[("index", int)])
+        data["index"] = np.arange(len(pos))
+        self.data = {"pos": pos.copy(), "data": data}
+
+        self.updateGraph()
+
+        for label, point in zip(labels, pos):
+            text = pg.TextItem(label, color=(80, 180, 255))
+            text.setZValue(1000)
+            text.setParentItem(self)
+            text.setPos(point[0], point[1])
+            self.textItems.append(text)
+
+    def updateGraph(self):
+        pg.GraphItem.setData(
+            self,
+            pos=self.data["pos"],
+            data=self.data["data"],
+            size=7,
+            symbol="o",
+            symbolBrush=(40, 140, 255, 230),
+            symbolPen=pg.mkPen("w", width=1),
+            pxMode=True
+        )
+
+        for i, item in enumerate(self.textItems):
+            if i < len(self.data["pos"]):
+                item.setPos(self.data["pos"][i][0], self.data["pos"][i][1])
+
+    def mouseDragEvent(self, ev):
+        if ev.button() != Qt.LeftButton:
+            ev.ignore()
+            return
+
+        if ev.isStart():
+            pos = ev.buttonDownPos()
+            pts = self.scatter.pointsAt(pos)
+
+            if len(pts) == 0:
+                ev.ignore()
+                return
+
+            self.dragPoint = pts[0]
+            ind = pts[0].data()[0]
+            self.dragOffset = self.data["pos"][ind] - pos
+
+        elif ev.isFinish():
+            self.dragPoint = None
+            return
+
+        else:
+            if self.dragPoint is None:
+                ev.ignore()
+                return
+
+        ind = self.dragPoint.data()[0]
+        new_pos = ev.pos() + self.dragOffset
+        new_xy = np.array([new_pos.x(), new_pos.y()], dtype=float)
+
+        self.data["pos"][ind] = new_xy
+        self.updateGraph()
+
+        if self.on_change is not None:
+            self.on_change(ind, new_xy)
+
+        ev.accept()
+
+
+class TailArcROI(object):
+    """
+    ROI arc pour la queue.
+    Elle remplace seulement la zone de recherche rectangle.
+    Le tracking reste identique : threshold -> contour -> centre -> angle.
+    """
+    def __init__(self, plot_view):
+        self.plot_view = plot_view
+
+        self.center = np.array([50.0, 150.0], dtype=float)
+        self.inner_radius = 35.0
+        self.outer_radius = 95.0
+        self.start_angle = -0.75
+        self.end_angle = 0.75
+        self.initialized = False
+
+        self._dirty_version = 0
+
+        self.fill_item = QtWidgets.QGraphicsPathItem()
+        self.fill_item.setPen(pg.mkPen(color=(40, 140, 255), width=1))
+        self.fill_item.setBrush(QtgGui.QBrush(QtgGui.QColor(40, 140, 255, 45)))
+
+        pen = pg.mkPen(color=(40, 140, 255), width=2)
+        side_pen = pg.mkPen(color=(40, 140, 255), width=1)
+
+        self.inner_curve = pg.PlotDataItem(x=[], y=[], pen=pen)
+        self.outer_curve = pg.PlotDataItem(x=[], y=[], pen=pen)
+        self.side_curve_1 = pg.PlotDataItem(x=[], y=[], pen=side_pen)
+        self.side_curve_2 = pg.PlotDataItem(x=[], y=[], pen=side_pen)
+        self.handles = TailArcHandleGraph(on_change=self._handle_moved)
+
+        for item in [
+            self.fill_item,
+            self.inner_curve,
+            self.outer_curve,
+            self.side_curve_1,
+            self.side_curve_2,
+            self.handles,
+        ]:
+            item.setZValue(900)
+            self.plot_view.addItem(item)
+
+        self.handles.setZValue(950)
+        self.set_visible(False)
+
+    def set_visible(self, visible):
+        for item in [
+            self.fill_item,
+            self.inner_curve,
+            self.outer_curve,
+            self.side_curve_1,
+            self.side_curve_2,
+            self.handles,
+        ]:
+            item.setVisible(visible)
+
+    def initialize_from_points(self, root, nose, tail):
+        root = np.asarray(root, dtype=float)
+        nose = np.asarray(nose, dtype=float)
+        tail = np.asarray(tail, dtype=float)
+
+        direction = tail - root
+        length = np.linalg.norm(direction)
+
+        if length < 1:
+            direction = root - nose
+            length = np.linalg.norm(direction)
+
+        if length < 1:
+            return
+
+        angle_mid = math.atan2(direction[1], direction[0])
+
+        self.center = root.copy()
+        self.inner_radius = max(8.0, length - 35.0)
+        self.outer_radius = max(self.inner_radius + 25.0, length + 55.0)
+        self.start_angle = angle_mid - math.radians(35.0)
+        self.end_angle = angle_mid + math.radians(35.0)
+        self.initialized = True
+        self._dirty_version += 1
+
+        self.set_visible(True)
+        self.update_graph()
+
+    def get_parameters(self):
+        return {
+            "center": [float(self.center[0]), float(self.center[1])],
+            "inner_radius": float(self.inner_radius),
+            "outer_radius": float(self.outer_radius),
+            "start_angle": float(self.start_angle),
+            "end_angle": float(self.end_angle),
+            "version": int(self._dirty_version),
+        }
+
+    def _angle_mid(self):
+        delta = _angle_delta_signed(self.start_angle, self.end_angle)
+        return self.start_angle + delta / 2.0
+
+    def _arc_points(self, radius, n=50):
+        delta = _angle_delta_signed(self.start_angle, self.end_angle)
+        angles = self.start_angle + np.linspace(0.0, delta, n)
+
+        x = self.center[0] + radius * np.cos(angles)
+        y = self.center[1] + radius * np.sin(angles)
+
+        return x, y, angles
+
+    def update_graph(self):
+        self.inner_radius = max(2.0, float(self.inner_radius))
+        self.outer_radius = max(self.inner_radius + 2.0, float(self.outer_radius))
+
+        inner_x, inner_y, _ = self._arc_points(self.inner_radius)
+        outer_x, outer_y, _ = self._arc_points(self.outer_radius)
+
+        self.inner_curve.setData(inner_x, inner_y)
+        self.outer_curve.setData(outer_x, outer_y)
+
+        self.side_curve_1.setData([inner_x[0], outer_x[0]], [inner_y[0], outer_y[0]])
+        self.side_curve_2.setData([inner_x[-1], outer_x[-1]], [inner_y[-1], outer_y[-1]])
+
+        path = QtgGui.QPainterPath()
+        path.moveTo(float(outer_x[0]), float(outer_y[0]))
+
+        for x_val, y_val in zip(outer_x[1:], outer_y[1:]):
+            path.lineTo(float(x_val), float(y_val))
+
+        for x_val, y_val in zip(inner_x[::-1], inner_y[::-1]):
+            path.lineTo(float(x_val), float(y_val))
+
+        path.closeSubpath()
+        self.fill_item.setPath(path)
+
+        angle_mid = self._angle_mid()
+        inner_mid = self.center + self.inner_radius * np.array([math.cos(angle_mid), math.sin(angle_mid)])
+        outer_mid = self.center + self.outer_radius * np.array([math.cos(angle_mid), math.sin(angle_mid)])
+        start_handle = self.center + self.outer_radius * np.array([math.cos(self.start_angle), math.sin(self.start_angle)])
+        end_handle = self.center + self.outer_radius * np.array([math.cos(self.end_angle), math.sin(self.end_angle)])
+
+        self.handles.set_positions(
+            [self.center, inner_mid, outer_mid, start_handle, end_handle],
+            ["C", "R1", "R2", "A", "B"]
+        )
+
+    def _handle_moved(self, index, pos):
+        try:
+            if index == 0:
+                self.center = pos
+
+            elif index == 1:
+                self.inner_radius = max(2.0, np.linalg.norm(pos - self.center))
+                if self.inner_radius >= self.outer_radius - 2.0:
+                    self.inner_radius = self.outer_radius - 2.0
+
+            elif index == 2:
+                self.outer_radius = max(self.inner_radius + 2.0, np.linalg.norm(pos - self.center))
+
+            elif index == 3:
+                self.start_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+
+            elif index == 4:
+                self.end_angle = math.atan2(pos[1] - self.center[1], pos[0] - self.center[0])
+
+            self._dirty_version += 1
+            self.update_graph()
+
+        except Exception as exc:
+            print("TailArcROI drag error:", exc)
+
+
+
 def testRoiInImageview(x,y,w,h,img):
 
     img_height,img_width=img.shape
@@ -500,6 +890,9 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.regionlr = pg.LinearRegionItem([0, 0], bounds=[0,0], movable=True)
 
         self.videoDisplay_Widget.plotView.addItem(self.regionlr)
+        self.regionlr.setVisible(False)
+
+        self.tailArcROI = TailArcROI(self.videoDisplay_Widget.plotView)
 
         self.curveTail =pg.PlotDataItem(x=[], y=[], pen=pg.mkPen(color='#3c02fc'))
         self.videoDisplay_Widget.plotView.addItem(self.curveTail)
@@ -951,6 +1344,11 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.mark.size=8
         self.mark.setData(pos=pos, adj=adj, pen=lines, size=self.mark.size, symbolBrush=symbolBrushes,symbolPen='w',symbol=symbols, pxMode=False, text=texts)
 
+    def get_tail_arc_roi_params(self):
+        if hasattr(self, "tailArcROI") and self.tailArcROI.initialized:
+            return self.tailArcROI.get_parameters()
+        return None
+
     def choose_result_folder(self):
         folder = QtWidgets.QFileDialog.getExistingDirectory(
             self,
@@ -1180,10 +1578,31 @@ class UIXenopus(QtWidgets.QMainWindow):
     def update_tail_segment_thresh(self,thresh_value):
         if not self.track_checkBox.isChecked() and self.selectTailRoot_radioButton.isChecked()==True:
 
-            frame=self.video_capture_widget.videoDisplayer_updater.current_frame_to_display
-            iframe,tail_pos,tail_angle=tail_Track(0,frame,thresh_value,self.regionlr.getRegion())
-            self.mark.data['pos'][2] = [tail_pos[0],tail_pos[1]]
-            self.mark.updateGraph()
+            if len(self.mark.data) == 0:
+                return
+
+            frame = self.video_capture_widget.videoDisplayer_updater.current_frame_to_display
+
+            if frame is None:
+                return
+
+            if not self.tailArcROI.initialized:
+                tailRoot = self.mark.data['pos'][0]
+                nose = self.mark.data['pos'][1]
+                tail = self.mark.data['pos'][2]
+                self.tailArcROI.initialize_from_points(tailRoot, nose, tail)
+
+            arc_roi = self.get_tail_arc_roi_params()
+
+            if arc_roi is None:
+                return
+
+            iframe,tail_pos,tail_angle = tail_Track_arc_fast(0, frame, thresh_value, arc_roi)
+
+            if tail_pos[0] != 0 or tail_pos[1] != 0:
+                self.mark.data['pos'][2] = [tail_pos[0],tail_pos[1]]
+                self.mark.updateGraph()
+
 
     def update_tail_segment_overlay(self):
         if self.track_checkBox.isChecked()==False :
@@ -1197,8 +1616,6 @@ class UIXenopus(QtWidgets.QMainWindow):
                 noseY=nose[1]
                 rootX=tailRoot[0]
                 rootY=tailRoot[1]
-                tailX=tail[0]
-                tailY=tail[1]
 
                 varM.bodyAxis_Y=noseY
 
@@ -1208,23 +1625,32 @@ class UIXenopus(QtWidgets.QMainWindow):
                 varM.bodyAngle = math.atan2(yv, xv)* 180 / math.pi
                 print("angle de l'axe du corps : ",varM.bodyAngle)
 
-                linePen=pg.mkPen(color='y', width=2)
+                if not self.tailArcROI.initialized:
+                    self.tailArcROI.initialize_from_points(tailRoot, nose, tail)
+                else:
+                    self.tailArcROI.update_graph()
 
-                self.regionlr.setBounds([0,rootX])
-                self.regionlr.setRegion([tailX-10,tailX+10])
+                frame = self.video_capture_widget.videoDisplayer_updater.current_frame_to_display
 
-                tail_region=self.regionlr.getRegion()
+                if frame is not None:
+                    arc_roi = self.get_tail_arc_roi_params()
 
-                frame=self.video_capture_widget.videoDisplayer_updater.current_frame_to_display.copy()
+                    if arc_roi is not None:
+                        iframe,tail_pos,tail_angle = tail_Track_arc_fast(
+                            0,
+                            frame,
+                            self.threshTail_slider.value(),
+                            arc_roi
+                        )
 
-                iframe,tail_pos,tail_angle=tail_Track(0,frame,self.threshTail_slider.value(),tail_region)
-
-                self.mark.data['pos'][2] = [tail_pos[0],tail_pos[1]]
-                self.mark.updateGraph()
+                        if tail_pos[0] != 0 or tail_pos[1] != 0:
+                            self.mark.data['pos'][2] = [tail_pos[0],tail_pos[1]]
+                            self.mark.updateGraph()
 
             else :
                 msg="no reference for body axe. You can add one with 'tail-root'"
                 QtWidgets.QMessageBox.warning(ui,"warning",str(msg),QtWidgets.QMessageBox.Ok)
+
 
     def init_track(self):
 

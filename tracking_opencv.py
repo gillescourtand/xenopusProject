@@ -14,6 +14,7 @@ Ce module ne doit pas gérer l'acquisition, l'affichage ou le CSV.
 
 import math
 import cv2
+import numpy as np
 from frame_packet import TrackingResult
 
 
@@ -117,6 +118,147 @@ def _eye_track_one(image, roi, threshold, body_axis_y, body_angle, kernel_size=9
     }
 
 
+
+_TAIL_ARC_MASK_CACHE = {}
+
+
+def _angle_delta_signed(start_angle, end_angle):
+    return (end_angle - start_angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _tail_arc_crop_mask_cached(image_shape, arc_roi):
+    """
+    Masque arc rapide avec cache.
+    Le masque est recalculé seulement si la ROI change.
+    """
+    img_height, img_width = image_shape[:2]
+
+    cx, cy = arc_roi["center"]
+    cx = float(cx)
+    cy = float(cy)
+
+    inner_radius = max(1.0, float(arc_roi["inner_radius"]))
+    outer_radius = max(inner_radius + 1.0, float(arc_roi["outer_radius"]))
+    start_angle = float(arc_roi["start_angle"])
+    end_angle = float(arc_roi["end_angle"])
+
+    version = int(arc_roi.get("version", 0))
+
+    key = (
+        img_height,
+        img_width,
+        int(round(cx)),
+        int(round(cy)),
+        int(round(inner_radius)),
+        int(round(outer_radius)),
+        int(round(start_angle * 1000)),
+        int(round(end_angle * 1000)),
+        version,
+    )
+
+    cached = _TAIL_ARC_MASK_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    # Cache petit : on garde seulement le dernier masque pour éviter une fuite mémoire.
+    _TAIL_ARC_MASK_CACHE.clear()
+
+    margin = 3
+
+    x0 = max(0, int(cx - outer_radius - margin))
+    x1 = min(img_width, int(cx + outer_radius + margin + 1))
+
+    y_plot_min = cy - outer_radius - margin
+    y_plot_max = cy + outer_radius + margin
+
+    y0 = max(0, int(img_height - y_plot_max))
+    y1 = min(img_height, int(img_height - y_plot_min + 1))
+
+    if x1 <= x0 or y1 <= y0:
+        result = (None, None)
+        _TAIL_ARC_MASK_CACHE[key] = result
+        return result
+
+    yy, xx = np.indices((y1 - y0, x1 - x0), dtype=np.float32)
+    xx += x0
+
+    y_plot = img_height - (yy + y0)
+
+    dx = xx - cx
+    dy = y_plot - cy
+
+    radius = np.sqrt(dx * dx + dy * dy)
+    angle = np.arctan2(dy, dx)
+
+    delta_total = _angle_delta_signed(start_angle, end_angle)
+    delta_pixel = (angle - start_angle + math.pi) % (2.0 * math.pi) - math.pi
+
+    if delta_total >= 0:
+        angle_ok = (delta_pixel >= 0) & (delta_pixel <= delta_total)
+    else:
+        angle_ok = (delta_pixel <= 0) & (delta_pixel >= delta_total)
+
+    radius_ok = (radius >= inner_radius) & (radius <= outer_radius)
+
+    mask = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+    mask[radius_ok & angle_ok] = 255
+
+    result = ((x0, y0, x1, y1), mask)
+    _TAIL_ARC_MASK_CACHE[key] = result
+    return result
+
+
+def _tail_track_arc_fast(image, tail_threshold, arc_roi, root_position, body_angle):
+    if arc_roi is None:
+        return None
+
+    img_height = image.shape[0]
+
+    crop_box, arc_mask = _tail_arc_crop_mask_cached(image.shape, arc_roi)
+
+    if crop_box is None:
+        return None
+
+    x0, y0, x1, y1 = crop_box
+    crop = image[y0:y1, x0:x1]
+
+    if crop.size == 0:
+        return None
+
+    th = cv2.threshold(crop, tail_threshold, 255, cv2.THRESH_BINARY_INV)[1]
+    th = cv2.bitwise_and(th, th, mask=arc_mask)
+    th = cv2.dilate(th, None, iterations=5)
+
+    contours = cv2.findContours(th.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
+    if len(contours) == 0:
+        return None
+
+    contour = sorted(contours, key=cv2.contourArea, reverse=True)[0]
+    moments = cv2.moments(contour)
+
+    if moments["m00"] == 0:
+        return None
+
+    tail_x_local = int(moments["m10"] / moments["m00"])
+    tail_y_local = int(moments["m01"] / moments["m00"])
+
+    tail_x = tail_x_local + x0
+    tail_y = int(img_height) - (tail_y_local + y0)
+
+    root_x, root_y = root_position
+
+    tail_angle = math.atan2((root_y - tail_y), (root_x - tail_x)) * 180.0 / math.pi
+    tail_angle *= -1.0
+    tail_angle_corr = tail_angle + body_angle
+
+    return {
+        "angle": tail_angle_corr,
+        "x": tail_x,
+        "y": tail_y,
+    }
+
+
+
 def _tail_track(image, tail_threshold, tail_region, root_position, body_angle):
     img_height = image.shape[0]
 
@@ -177,7 +319,8 @@ def track_frame_opencv(packet,
                        root_position,
                        body_axis_y,
                        body_angle,
-                       kernel_size=9):
+                       kernel_size=9,
+                       tail_arc_roi=None):
     result = TrackingResult(
         frame_id=packet.frame_id,
         timestamp=packet.timestamp,
@@ -225,13 +368,22 @@ def track_frame_opencv(packet,
                 result.eye2_y = eye2["y"]
                 result.metadata["eye2_descriptor"] = eye2["descriptor"]
 
-        tail = _tail_track(
-            gray,
-            tail_threshold,
-            tail_region,
-            root_position,
-            body_angle,
-        )
+        if tail_arc_roi is not None:
+            tail = _tail_track_arc_fast(
+                gray,
+                tail_threshold,
+                tail_arc_roi,
+                root_position,
+                body_angle,
+            )
+        else:
+            tail = _tail_track(
+                gray,
+                tail_threshold,
+                tail_region,
+                root_position,
+                body_angle,
+            )
 
         if tail is not None:
             result.tail_angle = tail["angle"]

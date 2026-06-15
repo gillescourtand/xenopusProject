@@ -186,7 +186,9 @@ class AppController(object):
             root_position=self._get_tail_root_position(),
             body_axis_y=self.varM.bodyAxis_Y,
             body_angle=self.varM.bodyAngle,
-            kernel_size=self.ui.openKernel_spinbox.value()
+            kernel_size=self.ui.openKernel_spinbox.value(),
+            tail_arc_roi=self.ui.get_tail_arc_roi_params()
+            if hasattr(self.ui, "get_tail_arc_roi_params") else None
         )
 
         if self.pipeline is not None:
