@@ -683,11 +683,60 @@ class TailArcROI(object):
 
         angle_mid = math.atan2(direction[1], direction[0])
 
+        # ------------------------------------------------------------------
+        # Taille par défaut de l'arc
+        # ------------------------------------------------------------------
+        # Ancien problème :
+        # la taille dépendait surtout de la distance root -> tail.
+        # Au démarrage, cette distance peut être très petite, donc l'arc était
+        # collé au root et minuscule.
+        #
+        # Ici, on force une taille basée sur la hauteur de l'image.
+        # Résultat : arc déjà grand, à gauche du root, avec une vraie distance.
+        # ------------------------------------------------------------------
+        try:
+            img_h = float(ui.video.height)
+        except Exception:
+            img_h = max(300.0, length * 4.0)
+
         self.center = root.copy()
-        self.inner_radius = max(8.0, length - 35.0)
-        self.outer_radius = max(self.inner_radius + 25.0, length + 55.0)
-        self.start_angle = angle_mid - math.radians(35.0)
-        self.end_angle = angle_mid + math.radians(35.0)
+
+        # Distance root -> tail actuelle
+        tail_distance = max(1.0, float(length))
+
+        # Distance de l'arc par rapport au root :
+        # + 1/4 de la hauteur de l'image vers la gauche
+        root_gap = max(
+            tail_distance + img_h * 0.25,
+            img_h * 0.48
+        )
+
+        # Épaisseur de l'arc
+        arc_width = max(
+            42.0,
+            img_h * 0.085
+        )
+
+        self.inner_radius = root_gap
+        self.outer_radius = root_gap + arc_width
+
+        # Hauteur visée de l'arc par rapport à la hauteur de l'image
+        target_arc_height = img_h * 0.82
+
+        # Calcule l'ouverture nécessaire pour obtenir cette hauteur
+        half_angle = math.asin(
+            min(0.95, target_arc_height / (2.0 * self.outer_radius))
+        )
+
+        # Sécurité : évite un arc trop ouvert
+        half_angle = max(
+            math.radians(25.0),
+            min(math.radians(55.0), half_angle)
+        )
+
+        self.start_angle = angle_mid - half_angle
+        self.end_angle = angle_mid + half_angle
+
         self.initialized = True
         self._dirty_version += 1
 
@@ -695,6 +744,14 @@ class TailArcROI(object):
         self._last_curve_value = 50.0
         self.set_visible(True)
         self.update_graph()
+
+        try:
+            ui.tailArcCurve_slider.blockSignals(True)
+            ui.tailArcCurve_slider.setValue(10)
+            ui.tailArcCurve_slider.blockSignals(False)
+            self.set_curve_value(10)
+        except Exception:
+            pass
 
     def _save_curve_reference(self):
         mid_angle = self._angle_mid()
@@ -1031,6 +1088,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.roisEye = []
         self.roisEllipseEye=[]
+        self.roisEyeLabels=[]
         self.tailAngleList=[]
         self.tailPosList=[]
 
@@ -1277,7 +1335,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.threshEye2_slider.valueChanged.connect((lambda value,idx=1 : self.threshEyeValue_change(value,idx)))
 
         self.threshTail_slider.setValue(90)
-        self.tailArcCurve_slider.setValue(50)
+        self.tailArcCurve_slider.setValue(10)
         self.threshEye1_slider.setValue(60)
         self.threshEye2_slider.setValue(60)
 
@@ -1458,6 +1516,52 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.show()
 
+    def update_eye_roi_label_positions(self):
+        for i, roi in enumerate(self.roisEye):
+            if i >= len(self.roisEyeLabels):
+                continue
+
+            try:
+                label = self.roisEyeLabels[i]
+                label.setText("Eye{}".format(i + 1))
+
+                w, h = roi.size()
+                label.setAnchor((1, 0))
+                label.setPos(float(w) - 4.0, 4.0)
+
+            except Exception:
+                pass
+
+    def refresh_eye_roi_labels(self):
+        for i, label in enumerate(self.roisEyeLabels):
+            try:
+                label.setText("Eye{}".format(i + 1))
+            except Exception:
+                pass
+
+        self.update_eye_roi_label_positions()
+
+    def add_eye_roi_label(self, roi):
+        idx = len(self.roisEyeLabels) + 1
+
+        label = pg.TextItem(
+            "Eye{}".format(idx),
+            color=(120, 170, 255, 120),
+            anchor=(1, 0)
+        )
+        label.setZValue(1200)
+        label.setParentItem(roi)
+
+        self.roisEyeLabels.append(label)
+
+        try:
+            roi.sigRegionChanged.connect(self.update_eye_roi_label_positions)
+        except Exception:
+            pass
+
+        self.update_eye_roi_label_positions()
+        return label
+
     def mouse_clicked(self,evt):
         pos = evt[0].pos()
 
@@ -1474,6 +1578,10 @@ class UIXenopus(QtWidgets.QMainWindow):
 
             if evt[0].button() == 1 and self.selectEyes_radioButton.isChecked():
 
+                if len(self.roisEye) >= 2:
+                    print("Maximum 2 eye ROIs.")
+                    return
+
                 w=100
                 h=80
 
@@ -1482,6 +1590,7 @@ class UIXenopus(QtWidgets.QMainWindow):
                 self.roisEye.append(Roi([x0-w/2, y0-h/2], [w, h],maxBounds=roi_limits,centered=True, pen=("b"),removable=True))
                 self.roisEye[-1].sigRemoveRequested.connect(self.remove_ROI)
                 self.videoDisplay_Widget.plotView.addItem(self.roisEye[-1])
+                self.add_eye_roi_label(self.roisEye[-1])
 
                 self.roisEllipseEye.append(define_rois.EllipseROI_Centered_NoHandle(pos=self.roisEye[-1].pos(),size=[1,1],pen=(3,5)))
                 self.videoDisplay_Widget.plotView.addItem(self.roisEllipseEye[-1])
@@ -1502,14 +1611,24 @@ class UIXenopus(QtWidgets.QMainWindow):
     def remove_ROI(self,evt):
 
          print("remove:",evt)
-         self.videoDisplay_Widget.plotView.scene().removeItem(evt)
 
          index=self.roisEye.index(evt)
+
+         if index < len(self.roisEyeLabels):
+             try:
+                 self.videoDisplay_Widget.plotView.scene().removeItem(self.roisEyeLabels[index])
+             except Exception:
+                 pass
+             del self.roisEyeLabels[index]
+
+         self.videoDisplay_Widget.plotView.scene().removeItem(evt)
 
          self.roisEye.remove(evt)
 
          self.videoDisplay_Widget.plotView.scene().removeItem(self.roisEllipseEye[index])
          del self.roisEllipseEye[index]
+
+         self.refresh_eye_roi_labels()
 
     def init_markNoseRootTail(self,x0,y0):
 
