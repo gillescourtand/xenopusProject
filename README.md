@@ -1,5 +1,5 @@
 # xenopus
-automatic high speed video-tracking of body parts (eyes, tail segments, limb…) in aquatic small vertebrate such as larval frog
+automatic high speed video-tracking of body parts (eyes, tail segments, limb…) in aquatic small vertebrate such as larval frog [(Bacqué-Cazenave et al. Nat Commun 13, 2957 (2022)](https://doi.org/10.1038/s41467-022-30636-6)
 
 18/09/2025
 new gui and optimized code
