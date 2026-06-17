@@ -555,13 +555,16 @@ class AppController(object):
 
         number = int(number_input.value())
 
-        if number <= 0:
+        # -1 = auto
+        #  0 = fichier manuel ..._000.csv
+        #  1 = fichier manuel ..._001.csv
+        if number < 0:
             return None
 
         return number
 
     def _get_next_track_number(self, output_dir, file_prefix):
-        max_number = 0
+        max_number = -1
 
         try:
             print("CSV output dir:", output_dir)

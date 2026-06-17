@@ -1341,14 +1341,15 @@ class UIXenopus(QtWidgets.QMainWindow):
         fileNumber_label = QtWidgets.QLabel("File no.")
 
         self.fileNumber_spinBox = QtWidgets.QSpinBox()
-        self.fileNumber_spinBox.setMinimum(0)
+        self.fileNumber_spinBox.setMinimum(-1)
         self.fileNumber_spinBox.setMaximum(999)
-        self.fileNumber_spinBox.setValue(0)
+        self.fileNumber_spinBox.setValue(-1)
         self.fileNumber_spinBox.setSpecialValueText("auto")
         self.fileNumber_spinBox.setMaximumWidth(70)
         self.fileNumber_spinBox.setToolTip(
             "Optional file number.\n"
             "auto = next available number.\n"
+            "0 creates file ..._000.csv\n"
             "Example: 3 creates file ..._003.csv"
         )
         self.fileNumber_spinBox.valueChanged.connect(self.update_next_csv_preview)
