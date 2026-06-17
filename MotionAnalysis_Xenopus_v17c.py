@@ -1349,7 +1349,6 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.fileNumber_spinBox.setToolTip(
             "Optional file number.\n"
             "auto = next available number.\n"
-            "0 creates file ..._000.csv\n"
             "Example: 3 creates file ..._003.csv"
         )
         self.fileNumber_spinBox.valueChanged.connect(self.update_next_csv_preview)
@@ -1826,6 +1825,54 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         return True
 
+    def clear_old_acquisition_buffers(self):
+        """
+        Vide les anciennes frames encore présentes dans l'ancien thread d'acquisition.
+
+        Important :
+        quand le pipeline démarre avant la nouvelle acquisition, il ne doit pas lire
+        les frames restantes de l'acquisition précédente.
+        """
+        try:
+            acquisition_thread = getattr(self.video_capture_widget, "acquisition_thread", None)
+
+            if acquisition_thread is None:
+                return
+
+            frame_buffer = getattr(acquisition_thread, "frame_buffer", None)
+
+            if frame_buffer is not None:
+                analysis_lock = getattr(frame_buffer, "analysis_lock", None)
+                analysis_frames = getattr(frame_buffer, "analysis_frames", None)
+
+                if analysis_lock is not None and analysis_frames is not None:
+                    with analysis_lock:
+                        analysis_frames.clear()
+
+                display_lock = getattr(frame_buffer, "display_lock", None)
+                display_frames = getattr(frame_buffer, "display_frames", None)
+
+                if display_lock is not None and display_frames is not None:
+                    with display_lock:
+                        display_frames.clear()
+
+            display_queue = getattr(acquisition_thread, "display_queue", None)
+
+            if display_queue is not None:
+                while True:
+                    try:
+                        display_queue.get_nowait()
+                    except Exception:
+                        break
+
+            # Très important : l'AcquisitionWorker ne doit plus pointer vers l'ancien thread.
+            self.video_capture_widget.acquisition_thread = None
+
+            print("Old acquisition buffers cleared")
+
+        except Exception as exc:
+            print("Erreur clear_old_acquisition_buffers:", exc)
+
     @pyqtSlot()
     def toggle_tracking(self):
         if self.controller is None:
@@ -1854,13 +1901,38 @@ class UIXenopus(QtWidgets.QMainWindow):
             try:
                 if hasattr(self.video_capture_widget, "stop_acquisition"):
                     self.video_capture_widget.stop_acquisition()
-                    time.sleep(0.1)
+                    # Petite pause de sécurité uniquement pour laisser l'ancien thread se fermer.
+                    # On ne garde plus 0.1 s pour éviter de perdre les premières frames.
+                    time.sleep(0.02)
 
+                # On supprime les frames restantes de l'ancienne acquisition.
+                # Sans ça, le CSV peut commencer par des frame_id de l'ancien run
+                # puis repartir à 0 quand la nouvelle acquisition démarre.
+                self.clear_old_acquisition_buffers()
+
+            except Exception as exc:
+                print("Erreur stop acquisition:", exc)
+                self.track_checkBox.setChecked(False)
+                return
+
+            try:
+                # Le pipeline tracking/CSV démarre avant l'acquisition.
+                # Comme ça, dès que la première frame arrive, elle peut être récupérée.
+                self.controller.start_tracking()
+            except Exception as exc:
+                print("Erreur start pipeline:", exc)
+                self.track_checkBox.setChecked(False)
+                return
+
+            try:
                 if hasattr(self.video_capture_widget, "start_acquisition"):
                     self.video_capture_widget.start_acquisition()
-                    time.sleep(0.1)
             except Exception as exc:
                 print("Erreur start acquisition:", exc)
+                try:
+                    self.controller.stop_tracking()
+                except Exception:
+                    pass
                 self.track_checkBox.setChecked(False)
                 return
 
@@ -1870,7 +1942,6 @@ class UIXenopus(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
-            self.controller.start_tracking()
             self.track_checkBox.setText("Stop")
             print("Tracking started with realtime pipeline")
 
@@ -1883,6 +1954,7 @@ class UIXenopus(QtWidgets.QMainWindow):
             try:
                 if hasattr(self.video_capture_widget, "stop_acquisition"):
                     self.video_capture_widget.stop_acquisition()
+                self.clear_old_acquisition_buffers()
             except Exception as exc:
                 print("Erreur stop acquisition:", exc)
 
