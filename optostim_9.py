@@ -43,6 +43,9 @@ class UIOptostim(pg.LayoutWidget):
     # stim_width, stim_spacing, stim_speed, stim_switch_frequency, stim_pattern, stim_mode, stim_direction
     stim_signal=pyqtSignal(int,int,int,int,str,str,str) #speed, direction
     pygame_finished = pyqtSignal()
+
+    # Affichage du cycle courant dans l'interface Qt
+    cycle_signal = pyqtSignal(int, int, bool)  # current_cycle, total_cycle, duration_enabled
         
     
     def __init__(self):
@@ -67,6 +70,7 @@ class UIOptostim(pg.LayoutWidget):
         self.thread_list=[]
         
         self.stim_signal.connect(self.update_gui)
+        self.cycle_signal.connect(self.update_cycle_display)
         self.pygame_finished.connect(self.cleanup_pygame_thread)
         
         """
@@ -138,6 +142,9 @@ class UIOptostim(pg.LayoutWidget):
         self.stim_duration_ckb = QtWidgets.QCheckBox(self)
         self.stim_duration_ckb.setToolTip('Enable automatic stop after the selected number of cycles')
 
+        self.stim_current_cycle_label = QtWidgets.QLabel('Current cycle: 0 / 12')
+        self.stim_current_cycle_label.setToolTip('Current optokinetic cycle / selected duration cycle')
+
         parameters_container = QtWidgets.QWidget()
         parameters_layout = QtWidgets.QGridLayout(parameters_container)
         parameters_layout.setContentsMargins(8, 4, 8, 4)
@@ -157,6 +164,7 @@ class UIOptostim(pg.LayoutWidget):
 
         parameters_layout.addWidget(self.stim_speed_label, 2, 0)
         parameters_layout.addWidget(self.stim_speed_input, 2, 1)
+        parameters_layout.addWidget(self.stim_current_cycle_label, 2, 2, 1, 3)
 
         parameters_layout.setColumnStretch(1, 1)
         parameters_layout.setColumnStretch(3, 1)
@@ -183,6 +191,28 @@ class UIOptostim(pg.LayoutWidget):
 
 
 
+    def update_cycle_display(self, current_cycle=0, total_cycle=0, duration_enabled=False):
+        """
+        Met à jour l'affichage du cycle courant.
+        current_cycle commence à 0 puis augmente à chaque cycle complet.
+        """
+        try:
+            current_cycle = int(current_cycle)
+            total_cycle = int(total_cycle)
+        except Exception:
+            current_cycle = 0
+            total_cycle = 0
+
+        if duration_enabled and total_cycle > 0:
+            self.stim_current_cycle_label.setText(
+                "Current cycle: {} / {}".format(current_cycle, total_cycle)
+            )
+        else:
+            self.stim_current_cycle_label.setText(
+                "Current cycle: {}".format(current_cycle)
+            )
+
+
     def start_pygame(self):
         if self.display_button.isChecked():
             if len(self.thread_list) > 0:
@@ -190,6 +220,11 @@ class UIOptostim(pg.LayoutWidget):
 
             self.is_running = True
             self.update_values()
+            self.update_cycle_display(
+                0,
+                self.stim_duration_cycle.value,
+                self.stim_duration_ckb.isChecked()
+            )
 
             self.pygame_thread = threading.Thread(
                 target=self.run_pygame,
@@ -223,6 +258,12 @@ class UIOptostim(pg.LayoutWidget):
         self.display_button.blockSignals(True)
         self.display_button.setChecked(False)
         self.display_button.blockSignals(False)
+
+        self.update_cycle_display(
+            0,
+            self.stim_duration_cycle.value,
+            self.stim_duration_ckb.isChecked()
+        )
 
         print("Optostimulation window stopped, ready to restart")
 
@@ -281,6 +322,11 @@ class UIOptostim(pg.LayoutWidget):
             self.stim_duration_cycle.value = int(self.stim_duration_input.text())
             self.stim_pattern.value = self.stim_pattern_input.currentText()
             self.stim_mode.value = self.stim_mode_input.currentText()
+            self.update_cycle_display(
+                0,
+                self.stim_duration_cycle.value,
+                self.stim_duration_ckb.isChecked()
+            )
             # timestamp=datetime.now().timestamp()
             # self.stim_signal.emit(timestamp,self.stim_speed.value,self.stim_direction.value)
             timestamp= time.perf_counter()
@@ -377,6 +423,15 @@ class UIOptostim(pg.LayoutWidget):
         cycle = 0
         clock = pygame.time.Clock()
     
+        try:
+            self.cycle_signal.emit(
+                cycle,
+                int(self.stim_duration_input.text()),
+                self.stim_duration_ckb.isChecked()
+            )
+        except Exception:
+            self.cycle_signal.emit(cycle, 0, False)
+
         while self.is_running :
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -393,6 +448,8 @@ class UIOptostim(pg.LayoutWidget):
             except ValueError:
                 duration_enabled = False
                 duration_cycle = 0
+
+            self.cycle_signal.emit(cycle, duration_cycle, duration_enabled)
 
             if duration_enabled and cycle >= duration_cycle:
                 print("Optostimulation duration cycle reached")
@@ -479,6 +536,7 @@ class UIOptostim(pg.LayoutWidget):
                         if stim_direction.value == 1:
                             direction = "Right"
                             cycle += 1
+                            self.cycle_signal.emit(cycle, duration_cycle, duration_enabled)
                         else:
                             direction = "Left"
 
