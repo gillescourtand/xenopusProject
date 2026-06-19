@@ -14,6 +14,7 @@ v9 : - create result list with timestamp when parameters have changed
 """
 
 import sys
+import os
 import pygame
 import threading
 # from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox
@@ -105,6 +106,21 @@ class UIOptostim(pg.LayoutWidget):
         self.stim_direction_input.addItems(['Right', 'Left'])
         self.stim_direction_input.currentIndexChanged.connect(self.change_direction)
 
+        self.open_on_screen_checkbox = QtWidgets.QCheckBox('Open on selected screen', self)
+        self.open_on_screen_checkbox.setToolTip(
+            "If checked, the optostimulation window opens on the selected monitor."
+        )
+
+        self.screen_select_combo = QtWidgets.QComboBox(self)
+        self.screen_select_combo.setToolTip("Select the monitor used for the optostimulation window")
+
+        self.refresh_screens_button = QtWidgets.QPushButton('↻', self)
+        self.refresh_screens_button.setMaximumWidth(34)
+        self.refresh_screens_button.setToolTip("Refresh monitor list")
+        self.refresh_screens_button.clicked.connect(self.refresh_screen_list)
+
+        self.refresh_screen_list()
+
         display_container = QtWidgets.QWidget()
         display_layout = QtWidgets.QHBoxLayout(display_container)
         display_layout.setContentsMargins(8, 6, 8, 4)
@@ -182,6 +198,9 @@ class UIOptostim(pg.LayoutWidget):
         control_layout.setSpacing(8)
         control_layout.addWidget(self.display_button, 1)
         control_layout.addWidget(self.pause_button, 1)
+        control_layout.addWidget(self.open_on_screen_checkbox, 0)
+        control_layout.addWidget(self.screen_select_combo, 2)
+        control_layout.addWidget(self.refresh_screens_button, 0)
 
         self.addWidget(display_container, row=0, col=0, colspan=3)
         self.addWidget(parameters_container, row=1, col=0, colspan=3)
@@ -189,6 +208,83 @@ class UIOptostim(pg.LayoutWidget):
 
         self.setLayout(self.layout)
 
+
+
+    def refresh_screen_list(self):
+        """
+        Remplit le menu déroulant avec les écrans détectés par Qt.
+        Le numéro affiché commence à 1 pour être plus lisible.
+        """
+        try:
+            current_index = self.screen_select_combo.currentIndex()
+        except Exception:
+            current_index = 0
+
+        self.screen_select_combo.clear()
+
+        try:
+            screens = QtWidgets.QApplication.screens()
+        except Exception:
+            screens = []
+
+        if not screens:
+            self.screen_select_combo.addItem("Screen 1", {
+                "index": 0,
+                "x": 0,
+                "y": 0,
+                "width": 1200,
+                "height": 800,
+            })
+            return
+
+        for idx, screen in enumerate(screens):
+            # availableGeometry = taille utilisable de l'écran,
+            # en évitant normalement la barre des tâches Windows.
+            try:
+                geometry = screen.availableGeometry()
+            except Exception:
+                geometry = screen.geometry()
+
+            name = screen.name() or "Screen"
+            label = "Screen {} - {} ({}x{} @ {}, {})".format(
+                idx + 1,
+                name,
+                geometry.width(),
+                geometry.height(),
+                geometry.x(),
+                geometry.y()
+            )
+
+            self.screen_select_combo.addItem(label, {
+                "index": idx,
+                "x": geometry.x(),
+                "y": geometry.y(),
+                "width": geometry.width(),
+                "height": geometry.height(),
+                "maximize": True,
+            })
+
+        if 0 <= current_index < self.screen_select_combo.count():
+            self.screen_select_combo.setCurrentIndex(current_index)
+
+    def get_selected_screen_config(self):
+        """
+        Retourne les infos de l'écran choisi, ou None si l'ouverture
+        sur écran sélectionné n'est pas activée.
+        """
+        try:
+            if not self.open_on_screen_checkbox.isChecked():
+                return None
+
+            data = self.screen_select_combo.currentData()
+
+            if not data:
+                return None
+
+            return dict(data)
+
+        except Exception:
+            return None
 
 
     def update_cycle_display(self, current_cycle=0, total_cycle=0, duration_enabled=False):
@@ -226,6 +322,8 @@ class UIOptostim(pg.LayoutWidget):
                 self.stim_duration_ckb.isChecked()
             )
 
+            screen_config = self.get_selected_screen_config()
+
             self.pygame_thread = threading.Thread(
                 target=self.run_pygame,
                 args=(
@@ -238,6 +336,7 @@ class UIOptostim(pg.LayoutWidget):
                     self.stim_direction,
                     self.is_running,
                     self.update_gui,
+                    screen_config,
                 )
             )
             self.pygame_thread.daemon = True
@@ -382,16 +481,40 @@ class UIOptostim(pg.LayoutWidget):
 
 
     # Function to run Pygame in a separate thread
-    def run_pygame(self,stim_width, stim_spacing, stim_speed, stim_switch_frequency, stim_pattern, stim_mode, stim_direction, is_running, update_gui_callback):
-        
+    def run_pygame(self,stim_width, stim_spacing, stim_speed, stim_switch_frequency, stim_pattern, stim_mode, stim_direction, is_running, update_gui_callback, screen_config=None):
+
         self.is_running=is_running
+
+        # Positionnement optionnel de la fenêtre Pygame sur l'écran choisi.
+        # SDL_VIDEO_WINDOW_POS doit être défini avant pygame.init().
+        if screen_config is not None:
+            try:
+                os.environ.pop('SDL_VIDEO_CENTERED', None)
+                os.environ['SDL_VIDEO_WINDOW_POS'] = "{},{}".format(
+                    int(screen_config.get("x", 0)),
+                    int(screen_config.get("y", 0))
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                os.environ.pop('SDL_VIDEO_WINDOW_POS', None)
+            except Exception:
+                pass
+
         # Initialize pygame
         pygame.init()
-    
+
         # Screen dimensions
-        screen_width = 6000
-        screen_height = 800
-        
+        if screen_config is not None:
+            screen_width = max(100, int(screen_config.get("width", 1200)))
+            screen_height = max(100, int(screen_config.get("height", 800)))
+        else:
+            # Anciennement 6000x800 : ça ouvrait une fenêtre énorme.
+            # Maintenant, sans écran sélectionné, on ouvre une taille raisonnable.
+            screen_width = 1200
+            screen_height = 800
+
         # For Moving Random Dots
         num_dots = 200  # Customize as needed
         dot_positions = [(random.randint(0, screen_width), random.randint(0, screen_height)) for _ in range(num_dots)]
@@ -409,6 +532,20 @@ class UIOptostim(pg.LayoutWidget):
         # Set up the display
         screen = pygame.display.set_mode((screen_width, screen_height), pygame.RESIZABLE)
         pygame.display.set_caption('Optostimulation')
+
+        # Mode "grand écran" mais pas vrai fullscreen :
+        # on garde la barre Windows / la barre de titre si le système les affiche.
+        # Sur Windows, on demande aussi à maximiser la fenêtre.
+        if screen_config is not None:
+            try:
+                if bool(screen_config.get("maximize", True)) and sys.platform.startswith("win"):
+                    import ctypes
+                    hwnd = pygame.display.get_wm_info().get("window")
+                    if hwnd:
+                        SW_MAXIMIZE = 3
+                        ctypes.windll.user32.ShowWindow(hwnd, SW_MAXIMIZE)
+            except Exception:
+                pass
     
         
         def calculate_line_count(screen_width, stim_width, stim_spacing):

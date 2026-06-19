@@ -395,7 +395,7 @@ def _tail_arc_crop_mask(image_shape, arc_roi):
     return (x0, y0, x1, y1), mask
 
 
-def tail_Track_arc_fast(iframe, analysimg, thresh_tail, arc_roi):
+def tail_Track_arc_fast(iframe, analysimg, thresh_tail, arc_roi, append_to_lists=True):
     """
     Même principe que tail_Track(), mais zone = arc.
     Optimisé : on ne traite que le crop autour de l'arc, pas toute l'image.
@@ -454,8 +454,9 @@ def tail_Track_arc_fast(iframe, analysimg, thresh_tail, arc_roi):
 
     tail_pos = [ctailX, ctailY]
 
-    ui.tailAngleList.append([iframe, tailAngleCorr])
-    ui.tailPosList.append([iframe, tail_pos])
+    if append_to_lists:
+        ui.tailAngleList.append([iframe, tailAngleCorr])
+        ui.tailPosList.append([iframe, tail_pos])
 
     return iframe, tail_pos, tailAngleCorr
 
@@ -603,8 +604,11 @@ class TailArcROI(object):
     Elle remplace seulement la zone de recherche rectangle.
     Le tracking reste identique : threshold -> contour -> centre -> angle.
     """
-    def __init__(self, plot_view):
+    def __init__(self, plot_view, label="R", color=(255, 0, 0), band_index=0):
         self.plot_view = plot_view
+        self.label = str(label)
+        self.color = tuple(color)
+        self.band_index = int(band_index)
 
         self.center = np.array([50.0, 150.0], dtype=float)
         self.inner_radius = 35.0
@@ -618,17 +622,21 @@ class TailArcROI(object):
         self._last_curve_value = 50.0
 
         self.fill_item = TailArcFillItem(self)
-        self.fill_item.setPen(pg.mkPen(color=(40, 140, 255), width=1))
-        self.fill_item.setBrush(QtgGui.QBrush(QtgGui.QColor(40, 140, 255, 45)))
+        self.fill_item.setPen(pg.mkPen(color=self.color, width=1))
+        self.fill_item.setBrush(QtgGui.QBrush(QtgGui.QColor(
+            int(self.color[0]), int(self.color[1]), int(self.color[2]), 45
+        )))
 
-        pen = pg.mkPen(color=(40, 140, 255), width=2)
-        side_pen = pg.mkPen(color=(40, 140, 255), width=1)
+        pen = pg.mkPen(color=self.color, width=2)
+        side_pen = pg.mkPen(color=self.color, width=1)
 
         self.inner_curve = pg.PlotDataItem(x=[], y=[], pen=pen)
         self.outer_curve = pg.PlotDataItem(x=[], y=[], pen=pen)
         self.side_curve_1 = pg.PlotDataItem(x=[], y=[], pen=side_pen)
         self.side_curve_2 = pg.PlotDataItem(x=[], y=[], pen=side_pen)
         self.handles = TailArcHandleGraph(on_change=self._handle_moved)
+        # Label R/M/C placé en haut à gauche de chaque arc.
+        self.label_item = pg.TextItem(self.label, color=self.color, anchor=(0.0, 1.0))
 
         self.fill_item.setZValue(800)
         self.plot_view.addItem(self.fill_item)
@@ -644,6 +652,10 @@ class TailArcROI(object):
 
         self.handles.setZValue(2000)
         self.plot_view.addItem(self.handles)
+
+        self.label_item.setZValue(2100)
+        self.plot_view.addItem(self.label_item)
+
         self.set_visible(False)
 
     def set_visible(self, visible):
@@ -654,6 +666,7 @@ class TailArcROI(object):
             self.side_curve_1,
             self.side_curve_2,
             self.handles,
+            self.label_item,
         ]:
             item.setVisible(visible)
 
@@ -701,13 +714,19 @@ class TailArcROI(object):
 
         self.center = root.copy()
 
-        root_gap = max(170.0, img_h * 0.38)
-        arc_width = max(42.0, img_h * 0.085)
+        # Trois bandes le long de la queue :
+        # R = proche de la racine, M = milieu, C = plus caudal.
+        base_length = max(float(length), img_h * 0.45)
+        fractions = [0.28, 0.52, 0.76]
+        index = max(0, min(2, int(self.band_index)))
+
+        root_gap = max(25.0, base_length * fractions[index])
+        arc_width = max(20.0, base_length * 0.11)
 
         self.inner_radius = root_gap
         self.outer_radius = root_gap + arc_width
 
-        # Ouverture un peu plus grande pour une zone plus haute.
+        # Ouverture un peu plus grande pour couvrir les mouvements latéraux.
         self.start_angle = angle_mid - math.radians(60.0)
         self.end_angle = angle_mid + math.radians(60.0)
 
@@ -720,9 +739,10 @@ class TailArcROI(object):
         self.update_graph()
 
         try:
-            ui.tailArcCurve_slider.blockSignals(True)
-            ui.tailArcCurve_slider.setValue(40)
-            ui.tailArcCurve_slider.blockSignals(False)
+            slider = ui.get_tail_arc_curve_slider(self.label)
+            slider.blockSignals(True)
+            slider.setValue(40)
+            slider.blockSignals(False)
             self.set_curve_value(40)
         except Exception:
             pass
@@ -883,6 +903,18 @@ class TailArcROI(object):
             ["R1", "R2", "A", "B"]
         )
 
+        try:
+            # Position du label : coin haut gauche de l'arc.
+            # On utilise tous les points de l'arc pour trouver x minimum et y maximum.
+            all_x = np.concatenate([inner_x, outer_x])
+            all_y = np.concatenate([inner_y, outer_y])
+            label_x = float(np.min(all_x))
+            label_y = float(np.max(all_y) + 6.0)
+            self.label_item.setText(self.label)
+            self.label_item.setPos(label_x, label_y)
+        except Exception:
+            pass
+
     def _handle_moved(self, index, pos):
         try:
             if index == 0:
@@ -916,9 +948,10 @@ class TailArcROI(object):
                 self._last_curve_value = 50.0
 
                 try:
-                    ui.tailArcCurve_slider.blockSignals(True)
-                    ui.tailArcCurve_slider.setValue(50)
-                    ui.tailArcCurve_slider.blockSignals(False)
+                    slider = ui.get_tail_arc_curve_slider(self.label)
+                    slider.blockSignals(True)
+                    slider.setValue(50)
+                    slider.blockSignals(False)
                 except Exception:
                     pass
 
@@ -939,9 +972,10 @@ class TailArcROI(object):
                 self._last_curve_value = 50.0
 
                 try:
-                    ui.tailArcCurve_slider.blockSignals(True)
-                    ui.tailArcCurve_slider.setValue(50)
-                    ui.tailArcCurve_slider.blockSignals(False)
+                    slider = ui.get_tail_arc_curve_slider(self.label)
+                    slider.blockSignals(True)
+                    slider.setValue(50)
+                    slider.blockSignals(False)
                 except Exception:
                     pass
 
@@ -1065,6 +1099,12 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.roisEyeLabels=[]
         self.tailAngleList=[]
         self.tailPosList=[]
+        self.tailAngleListR=[]
+        self.tailAngleListM=[]
+        self.tailAngleListC=[]
+        self.tailPosListR=[]
+        self.tailPosListM=[]
+        self.tailPosListC=[]
 
         self.mark = graphMark()
         self.listTailSegments=[]
@@ -1086,7 +1126,12 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.penCyan=pg.mkPen((0,255,255), width=2)
         self.penOrange=pg.mkPen((255,128,0), width=2)
-        self.penGreen=pg.mkPen((255,128,0), width=2)
+        self.penGreen=pg.mkPen((0,255,0), width=2)
+
+        # Couleurs type HSV pour les trois arcs de queue.
+        self.penTailR=pg.mkPen((255,0,0), width=2)
+        self.penTailM=pg.mkPen((0,255,0), width=2)
+        self.penTailC=pg.mkPen((0,80,255), width=2)
 
         self.d1 = Dock("Image", size=(1000,500))
 
@@ -1094,7 +1139,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.d3 = Dock("Eye 1", size=(500,200))
         self.d4 = Dock("Eye 2", size=(500,200))
-        self.d5 = Dock("Tail", size=(500,200))
+        self.d5 = Dock("Tails", size=(500,200))
         self.d6 = Dock("Eye 1-Y", size=(500,200))
         self.d7 = Dock("Eye 2-Y", size=(500,200))
         self.d8 = Dock("Regions of interest", size=(500,200))
@@ -1126,7 +1171,66 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.videoDisplay_Widget.plotView.addItem(self.regionlr)
         self.regionlr.setVisible(False)
 
-        self.tailArcROI = TailArcROI(self.videoDisplay_Widget.plotView)
+        self.tailArcROI_R = TailArcROI(
+            self.videoDisplay_Widget.plotView,
+            label="R",
+            color=(255, 0, 0),
+            band_index=0
+        )
+        self.tailArcROI_M = TailArcROI(
+            self.videoDisplay_Widget.plotView,
+            label="M",
+            color=(0, 255, 0),
+            band_index=1
+        )
+        self.tailArcROI_C = TailArcROI(
+            self.videoDisplay_Widget.plotView,
+            label="C",
+            color=(0, 80, 255),
+            band_index=2
+        )
+        self.tailArcROIs = {
+            "R": self.tailArcROI_R,
+            "M": self.tailArcROI_M,
+            "C": self.tailArcROI_C,
+        }
+
+        # Lignes et points de tracking indépendants pour chaque arc.
+        # Chaque arc a son propre point détecté et sa propre droite root -> point.
+        self.tailArcTrackingLines = {}
+        self.tailArcTrackingPoints = {}
+        self.tailArcColors = {
+            "R": (255, 0, 0),
+            "M": (0, 255, 0),
+            "C": (0, 80, 255),
+        }
+
+        for label, color in self.tailArcColors.items():
+            line_item = pg.PlotDataItem(
+                x=[],
+                y=[],
+                pen=pg.mkPen(color=color, width=2)
+            )
+            point_item = pg.ScatterPlotItem(
+                x=[],
+                y=[],
+                size=9,
+                brush=pg.mkBrush(color),
+                pen=pg.mkPen(color='w', width=1),
+                pxMode=True
+            )
+
+            line_item.setZValue(2300)
+            point_item.setZValue(2400)
+
+            self.videoDisplay_Widget.plotView.addItem(line_item)
+            self.videoDisplay_Widget.plotView.addItem(point_item)
+
+            self.tailArcTrackingLines[label] = line_item
+            self.tailArcTrackingPoints[label] = point_item
+
+        # Compatibilité avec l'ancien code qui attend self.tailArcROI.
+        self.tailArcROI = self.tailArcROI_R
 
         self.curveTail =pg.PlotDataItem(x=[], y=[], pen=pg.mkPen(color='#3c02fc'))
         self.videoDisplay_Widget.plotView.addItem(self.curveTail)
@@ -1165,7 +1269,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.d4.addWidget(self.w4)
 
-        self.w5 = pg.PlotWidget(title="tail")
+        self.w5 = pg.PlotWidget(title="tails")
 
         self.d5.addWidget(self.w5)
 
@@ -1181,11 +1285,8 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.manipType_comboBox = QtWidgets.QComboBox()
         self.manipType_comboBox.addItem("choose an analysis mode...")
-        self.manipType_comboBox.addItem("eyes-tail track")
+        self.manipType_comboBox.addItem("eyes-tails track")
         self.manipType_comboBox.addItem("eyes track only")
-        self.manipType_comboBox.addItem("eyes-limbs track")
-        self.manipType_comboBox.addItem("limbs track only")
-        self.manipType_comboBox.addItem("test live")
 
         self.manipType_comboBox.setEnabled(True)
 
@@ -1197,7 +1298,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.selectEyes_radioButton.setChecked(True)
         self.selectEyes_radioButton.setText("Eye")
         self.selectTailRoot_radioButton = QtWidgets.QRadioButton(splitter_Selection)
-        self.selectTailRoot_radioButton.setText("Tail root")
+        self.selectTailRoot_radioButton.setText("Tails root")
 
         self.selectLimbs_radioButton = QtWidgets.QRadioButton(splitter_Selection)
         self.selectLimbs_radioButton.setText("Limb")
@@ -1236,9 +1337,9 @@ class UIXenopus(QtWidgets.QMainWindow):
             }
         """)
 
-        splitter_ThreshTail=QtWidgets.QSplitter()
+        splitter_ThreshTail=QtWidgets.QWidget()
         tailSplitter_label= QtWidgets.QLabel(splitter_ThreshTail)
-        tailSplitter_label.setText("Tail segments")
+        tailSplitter_label.setText("Segments")
 
         tailSegNumber_label= QtWidgets.QLabel(splitter_ThreshTail)
         tailSegNumber_label.setText("number")
@@ -1258,7 +1359,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.tailSegSize_spinBox.valueChanged.connect(self.update_tail_segment_overlay)
 
         threshTailSlider_label= QtWidgets.QLabel(splitter_ThreshTail)
-        threshTailSlider_label.setText("threshold")
+        threshTailSlider_label.setText("R thresh")
         threshTailValue_label = QtWidgets.QLabel(splitter_ThreshTail)
         threshTailValue_label.setText("00")
         threshTailValue_label.setAlignment(Qt.AlignCenter)
@@ -1269,18 +1370,115 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.threshTail_slider.valueChanged.connect(threshTailValue_label.setNum)
         self.threshTail_slider.valueChanged.connect(self.update_tail_segment_thresh)
 
-        tailArcCurve_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurve_label.setText("curve")
-        self.tailArcCurve_slider = QtWidgets.QSlider(splitter_ThreshTail)
-        self.tailArcCurve_slider.setMinimum(0)
-        self.tailArcCurve_slider.setMaximum(100)
-        self.tailArcCurve_slider.setPageStep(5)
-        self.tailArcCurve_slider.setOrientation(Qt.Horizontal)
-        tailArcCurveValue_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurveValue_label.setText("50")
-        tailArcCurveValue_label.setAlignment(Qt.AlignCenter)
-        self.tailArcCurve_slider.valueChanged.connect(tailArcCurveValue_label.setNum)
-        self.tailArcCurve_slider.valueChanged.connect(self.update_tail_arc_curve)
+        threshTailMSlider_label= QtWidgets.QLabel(splitter_ThreshTail)
+        threshTailMSlider_label.setText("M thresh")
+        threshTailMValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        threshTailMValue_label.setText("00")
+        threshTailMValue_label.setAlignment(Qt.AlignCenter)
+        self.threshTailM_slider = QtWidgets.QSlider(splitter_ThreshTail)
+        self.threshTailM_slider.setMaximum(255)
+        self.threshTailM_slider.setPageStep(10)
+        self.threshTailM_slider.setOrientation(Qt.Horizontal)
+        self.threshTailM_slider.valueChanged.connect(threshTailMValue_label.setNum)
+        self.threshTailM_slider.valueChanged.connect(self.update_tail_segment_thresh)
+
+        threshTailCSlider_label= QtWidgets.QLabel(splitter_ThreshTail)
+        threshTailCSlider_label.setText("C thresh")
+        threshTailCValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        threshTailCValue_label.setText("00")
+        threshTailCValue_label.setAlignment(Qt.AlignCenter)
+        self.threshTailC_slider = QtWidgets.QSlider(splitter_ThreshTail)
+        self.threshTailC_slider.setMaximum(255)
+        self.threshTailC_slider.setPageStep(10)
+        self.threshTailC_slider.setOrientation(Qt.Horizontal)
+        self.threshTailC_slider.valueChanged.connect(threshTailCValue_label.setNum)
+        self.threshTailC_slider.valueChanged.connect(self.update_tail_segment_thresh)
+
+        tailArcCurveR_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurveR_label.setText("R curve")
+        self.tailArcCurveR_slider = QtWidgets.QSlider(splitter_ThreshTail)
+        self.tailArcCurveR_slider.setMinimum(0)
+        self.tailArcCurveR_slider.setMaximum(100)
+        self.tailArcCurveR_slider.setPageStep(5)
+        self.tailArcCurveR_slider.setOrientation(Qt.Horizontal)
+        self.tailArcCurveR_slider.setValue(40)
+        tailArcCurveRValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurveRValue_label.setText("40")
+        tailArcCurveRValue_label.setAlignment(Qt.AlignCenter)
+        self.tailArcCurveR_slider.valueChanged.connect(tailArcCurveRValue_label.setNum)
+        self.tailArcCurveR_slider.valueChanged.connect(self.update_tail_arc_curve_R)
+
+        tailArcCurveM_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurveM_label.setText("M curve")
+        self.tailArcCurveM_slider = QtWidgets.QSlider(splitter_ThreshTail)
+        self.tailArcCurveM_slider.setMinimum(0)
+        self.tailArcCurveM_slider.setMaximum(100)
+        self.tailArcCurveM_slider.setPageStep(5)
+        self.tailArcCurveM_slider.setOrientation(Qt.Horizontal)
+        self.tailArcCurveM_slider.setValue(40)
+        tailArcCurveMValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurveMValue_label.setText("40")
+        tailArcCurveMValue_label.setAlignment(Qt.AlignCenter)
+        self.tailArcCurveM_slider.valueChanged.connect(tailArcCurveMValue_label.setNum)
+        self.tailArcCurveM_slider.valueChanged.connect(self.update_tail_arc_curve_M)
+
+        tailArcCurveC_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurveC_label.setText("C curve")
+        self.tailArcCurveC_slider = QtWidgets.QSlider(splitter_ThreshTail)
+        self.tailArcCurveC_slider.setMinimum(0)
+        self.tailArcCurveC_slider.setMaximum(100)
+        self.tailArcCurveC_slider.setPageStep(5)
+        self.tailArcCurveC_slider.setOrientation(Qt.Horizontal)
+        self.tailArcCurveC_slider.setValue(40)
+        tailArcCurveCValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        tailArcCurveCValue_label.setText("40")
+        tailArcCurveCValue_label.setAlignment(Qt.AlignCenter)
+        self.tailArcCurveC_slider.valueChanged.connect(tailArcCurveCValue_label.setNum)
+        self.tailArcCurveC_slider.valueChanged.connect(self.update_tail_arc_curve_C)
+
+        # Compatibilité avec l'ancien code : tailArcCurve_slider pointe vers R.
+        self.tailArcCurve_slider = self.tailArcCurveR_slider
+
+        # Layout compact pour les 3 arcs de queue.
+        # Avant : tous les contrôles étaient sur une seule ligne, donc il manquait de place.
+        # Maintenant :
+        # ligne 0 = paramètres généraux
+        # ligne 1 = seuils R/M/C
+        # ligne 2 = courbures R/M/C
+        tailGrid = QtWidgets.QGridLayout(splitter_ThreshTail)
+        tailGrid.setContentsMargins(0, 0, 0, 0)
+        tailGrid.setHorizontalSpacing(6)
+        tailGrid.setVerticalSpacing(4)
+
+        tailGrid.addWidget(tailSplitter_label, 0, 0)
+        tailGrid.addWidget(tailSegNumber_label, 0, 1)
+        tailGrid.addWidget(self.tailSegNumber_spinBox, 0, 2)
+        tailGrid.addWidget(tailSegSize_label, 0, 3)
+        tailGrid.addWidget(self.tailSegSize_spinBox, 0, 4)
+        tailGrid.setColumnStretch(5, 1)
+
+        tailGrid.addWidget(threshTailSlider_label, 1, 0)
+        tailGrid.addWidget(threshTailValue_label, 1, 1)
+        tailGrid.addWidget(self.threshTail_slider, 1, 2)
+        tailGrid.addWidget(threshTailMSlider_label, 1, 3)
+        tailGrid.addWidget(threshTailMValue_label, 1, 4)
+        tailGrid.addWidget(self.threshTailM_slider, 1, 5)
+        tailGrid.addWidget(threshTailCSlider_label, 1, 6)
+        tailGrid.addWidget(threshTailCValue_label, 1, 7)
+        tailGrid.addWidget(self.threshTailC_slider, 1, 8)
+
+        tailGrid.addWidget(tailArcCurveR_label, 2, 0)
+        tailGrid.addWidget(tailArcCurveRValue_label, 2, 1)
+        tailGrid.addWidget(self.tailArcCurveR_slider, 2, 2)
+        tailGrid.addWidget(tailArcCurveM_label, 2, 3)
+        tailGrid.addWidget(tailArcCurveMValue_label, 2, 4)
+        tailGrid.addWidget(self.tailArcCurveM_slider, 2, 5)
+        tailGrid.addWidget(tailArcCurveC_label, 2, 6)
+        tailGrid.addWidget(tailArcCurveCValue_label, 2, 7)
+        tailGrid.addWidget(self.tailArcCurveC_slider, 2, 8)
+
+        for stretch_col in [2, 5, 8]:
+            tailGrid.setColumnStretch(stretch_col, 1)
 
         splitter_ThreshEyes=QtWidgets.QSplitter()
 
@@ -1309,6 +1507,8 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.threshEye2_slider.valueChanged.connect((lambda value,idx=1 : self.threshEyeValue_change(value,idx)))
 
         self.threshTail_slider.setValue(90)
+        self.threshTailM_slider.setValue(90)
+        self.threshTailC_slider.setValue(90)
         self.tailArcCurve_slider.setValue(40)
         self.threshEye1_slider.setValue(60)
         self.threshEye2_slider.setValue(60)
@@ -1397,13 +1597,15 @@ class UIXenopus(QtWidgets.QMainWindow):
         selectionLayout.setSpacing(6)
         selectionLayout.addWidget(self.selectEyes_radioButton)
         selectionLayout.addWidget(self.selectTailRoot_radioButton)
-        selectionLayout.addWidget(self.selectLimbs_radioButton)
-        selectionLayout.addWidget(self.selectExclusion_radioButton)
+        # Limb et Circle sont gardés dans le code pour compatibilité,
+        # mais retirés de l'interface pour libérer de la place.
+        self.selectLimbs_radioButton.hide()
+        self.selectExclusion_radioButton.hide()
 
         bgGroup = QtWidgets.QGroupBox("Background")
-        bgLayout = QtWidgets.QHBoxLayout(bgGroup)
+        bgLayout = QtWidgets.QVBoxLayout(bgGroup)
         bgLayout.setContentsMargins(8, 8, 8, 8)
-        bgLayout.setSpacing(18)
+        bgLayout.setSpacing(6)
         bgLayout.addWidget(self.whiteBgd_radioButton)
         bgLayout.addWidget(self.blackBgd_radioButton)
         bgLayout.addStretch(1)
@@ -1414,7 +1616,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         eyesLayout.setSpacing(6)
         eyesLayout.addWidget(splitter_ThreshEyes)
 
-        tailGroup = QtWidgets.QGroupBox("Tail")
+        tailGroup = QtWidgets.QGroupBox("Tails")
         tailLayout = QtWidgets.QVBoxLayout(tailGroup)
         tailLayout.setContentsMargins(8, 8, 8, 8)
         tailLayout.setSpacing(6)
@@ -1457,11 +1659,11 @@ class UIXenopus(QtWidgets.QMainWindow):
             group.setStyleSheet(panelStyle)
 
         self.w8.addWidget(modeGroup, row=0, col=0)
-        self.w8.addWidget(selectionGroup, row=1, col=0, rowspan=3)
+        self.w8.addWidget(selectionGroup, row=1, col=0)
+        self.w8.addWidget(bgGroup, row=2, col=0, rowspan=2)
 
-        self.w8.addWidget(bgGroup, row=0, col=1, colspan=2)
-        self.w8.addWidget(eyesGroup, row=1, col=1, colspan=2)
-        self.w8.addWidget(tailGroup, row=2, col=1, colspan=2)
+        self.w8.addWidget(eyesGroup, row=0, col=1, colspan=2)
+        self.w8.addWidget(tailGroup, row=1, col=1, rowspan=2, colspan=2)
         self.w8.addWidget(outputGroup, row=3, col=1, colspan=2)
 
         self.w8.addWidget(actionsGroup, row=0, col=3, rowspan=4)
@@ -1730,9 +1932,107 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.mark.setData(pos=pos, adj=adj, pen=lines, size=self.mark.size, symbolBrush=symbolBrushes,symbolPen='w',symbol=symbols, pxMode=False, text=texts)
 
     def get_tail_arc_roi_params(self):
-        if hasattr(self, "tailArcROI") and self.tailArcROI.initialized:
-            return self.tailArcROI.get_parameters()
+        # Compatibilité avec l'ancien tracking : retourne R uniquement.
+        if hasattr(self, "tailArcROI_R") and self.tailArcROI_R.initialized:
+            return self.tailArcROI_R.get_parameters()
         return None
+
+    def get_tail_arc_roi_params_all(self):
+        params = {}
+
+        for label, roi in self.get_tail_arc_rois().items():
+            if roi.initialized:
+                params[label] = roi.get_parameters()
+
+        return params if len(params) > 0 else None
+
+    def get_tail_arc_rois(self):
+        if hasattr(self, "tailArcROIs"):
+            return self.tailArcROIs
+
+        if hasattr(self, "tailArcROI"):
+            return {"R": self.tailArcROI}
+
+        return {}
+
+    def get_tail_arc_thresholds(self):
+        return {
+            "R": int(self.threshTail_slider.value()),
+            "M": int(self.threshTailM_slider.value()) if hasattr(self, "threshTailM_slider") else int(self.threshTail_slider.value()),
+            "C": int(self.threshTailC_slider.value()) if hasattr(self, "threshTailC_slider") else int(self.threshTail_slider.value()),
+        }
+
+    def get_tail_arc_curve_slider(self, label):
+        label = str(label).upper()
+
+        if label == "M" and hasattr(self, "tailArcCurveM_slider"):
+            return self.tailArcCurveM_slider
+
+        if label == "C" and hasattr(self, "tailArcCurveC_slider"):
+            return self.tailArcCurveC_slider
+
+        if hasattr(self, "tailArcCurveR_slider"):
+            return self.tailArcCurveR_slider
+
+        return self.tailArcCurve_slider
+
+    def set_tail_arc_tracking_marker(self, label, tail_pos):
+        """
+        Affiche un point de queue et une droite root -> point pour un arc donné.
+        Il y a donc une droite R, une droite M et une droite C.
+        """
+        try:
+            label = str(label).upper()
+            line_item = self.tailArcTrackingLines.get(label)
+            point_item = self.tailArcTrackingPoints.get(label)
+
+            if line_item is None or point_item is None:
+                return
+
+            if tail_pos is None or len(tail_pos) < 2:
+                line_item.setData([], [])
+                point_item.setData([], [])
+                return
+
+            x_pos = float(tail_pos[0])
+            y_pos = float(tail_pos[1])
+
+            if x_pos == 0 and y_pos == 0:
+                line_item.setData([], [])
+                point_item.setData([], [])
+                return
+
+            root = self.mark.data['pos'][0]
+            root_x = float(root[0])
+            root_y = float(root[1])
+
+            line_item.setData([root_x, x_pos], [root_y, y_pos])
+            point_item.setData([x_pos], [y_pos])
+
+        except Exception as exc:
+            print("set_tail_arc_tracking_marker error:", exc)
+
+    def clear_tail_arc_tracking_markers(self):
+        for label in ["R", "M", "C"]:
+            self.set_tail_arc_tracking_marker(label, None)
+
+    def _selected_tail_arc_labels(self):
+        # Conservé pour compatibilité, mais les sliders curve sont maintenant séparés.
+        return ["R", "M", "C"]
+
+    def _initialize_tail_arcs_if_needed(self):
+        if len(self.mark.data) == 0:
+            return False
+
+        tailRoot = self.mark.data['pos'][0]
+        nose = self.mark.data['pos'][1]
+        tail = self.mark.data['pos'][2]
+
+        for label, roi in self.get_tail_arc_rois().items():
+            if not roi.initialized:
+                roi.initialize_from_points(tailRoot, nose, tail)
+
+        return True
 
     def choose_result_folder(self):
         folder = QtWidgets.QFileDialog.getExistingDirectory(
@@ -2034,11 +2334,26 @@ class UIXenopus(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(ui,"warning",str(msg),QtWidgets.QMessageBox.Ok)
 
     def update_tail_arc_curve(self, value):
-        if hasattr(self, "tailArcROI") and self.tailArcROI.initialized:
-            self.tailArcROI.set_curve_value(value)
+        # Compatibilité : agit sur R si l'ancien nom est appelé.
+        self.update_tail_arc_curve_R(value)
 
-            if not self.track_checkBox.isChecked() and self.selectTailRoot_radioButton.isChecked()==True:
-                self.update_tail_segment_thresh(self.threshTail_slider.value())
+    def _update_tail_arc_curve_for_label(self, label, value):
+        roi = self.get_tail_arc_rois().get(label)
+
+        if roi is not None and roi.initialized:
+            roi.set_curve_value(value)
+
+        if not self.track_checkBox.isChecked() and self.selectTailRoot_radioButton.isChecked()==True:
+            self.update_tail_segment_thresh(self.threshTail_slider.value())
+
+    def update_tail_arc_curve_R(self, value):
+        self._update_tail_arc_curve_for_label("R", value)
+
+    def update_tail_arc_curve_M(self, value):
+        self._update_tail_arc_curve_for_label("M", value)
+
+    def update_tail_arc_curve_C(self, value):
+        self._update_tail_arc_curve_for_label("C", value)
 
     def update_tail_segment_thresh(self,thresh_value):
         if not self.track_checkBox.isChecked() and self.selectTailRoot_radioButton.isChecked()==True:
@@ -2051,22 +2366,39 @@ class UIXenopus(QtWidgets.QMainWindow):
             if frame is None:
                 return
 
-            if not self.tailArcROI.initialized:
-                tailRoot = self.mark.data['pos'][0]
-                nose = self.mark.data['pos'][1]
-                tail = self.mark.data['pos'][2]
-                self.tailArcROI.initialize_from_points(tailRoot, nose, tail)
-                self.tailArcROI.set_curve_value(self.tailArcCurve_slider.value())
-
-            arc_roi = self.get_tail_arc_roi_params()
-
-            if arc_roi is None:
+            if not self._initialize_tail_arcs_if_needed():
                 return
 
-            iframe,tail_pos,tail_angle = tail_Track_arc_fast(0, frame, thresh_value, arc_roi)
+            thresholds = self.get_tail_arc_thresholds()
+            last_valid_tail = None
 
-            if tail_pos[0] != 0 or tail_pos[1] != 0:
-                self.mark.data['pos'][2] = [tail_pos[0],tail_pos[1]]
+            # Preview des trois arcs : chaque arc affiche son propre point
+            # et sa propre droite root -> point.
+            for label in ["R", "M", "C"]:
+                roi = self.get_tail_arc_rois().get(label)
+
+                if roi is None or not roi.initialized:
+                    self.set_tail_arc_tracking_marker(label, None)
+                    continue
+
+                iframe, tail_pos, tail_angle = tail_Track_arc_fast(
+                    0,
+                    frame,
+                    thresholds.get(label, self.threshTail_slider.value()),
+                    roi.get_parameters(),
+                    append_to_lists=False
+                )
+
+                if tail_pos[0] != 0 or tail_pos[1] != 0:
+                    self.set_tail_arc_tracking_marker(label, tail_pos)
+                    last_valid_tail = tail_pos
+                else:
+                    self.set_tail_arc_tracking_marker(label, None)
+
+            # On garde le point tail historique pour compatibilité, mais
+            # les trois points R/M/C sont affichés séparément.
+            if last_valid_tail is not None:
+                self.mark.data['pos'][2] = [last_valid_tail[0], last_valid_tail[1]]
                 self.mark.updateGraph()
 
 
@@ -2091,28 +2423,16 @@ class UIXenopus(QtWidgets.QMainWindow):
                 varM.bodyAngle = math.atan2(yv, xv)* 180 / math.pi
                 print("angle de l'axe du corps : ",varM.bodyAngle)
 
-                if not self.tailArcROI.initialized:
-                    self.tailArcROI.initialize_from_points(tailRoot, nose, tail)
-                    self.tailArcROI.set_curve_value(self.tailArcCurve_slider.value())
-                else:
-                    self.tailArcROI.update_graph()
+                self._initialize_tail_arcs_if_needed()
+
+                for roi in self.get_tail_arc_rois().values():
+                    if roi.initialized:
+                        roi.update_graph()
 
                 frame = self.video_capture_widget.videoDisplayer_updater.current_frame_to_display
 
                 if frame is not None:
-                    arc_roi = self.get_tail_arc_roi_params()
-
-                    if arc_roi is not None:
-                        iframe,tail_pos,tail_angle = tail_Track_arc_fast(
-                            0,
-                            frame,
-                            self.threshTail_slider.value(),
-                            arc_roi
-                        )
-
-                        if tail_pos[0] != 0 or tail_pos[1] != 0:
-                            self.mark.data['pos'][2] = [tail_pos[0],tail_pos[1]]
-                            self.mark.updateGraph()
+                    self.update_tail_segment_thresh(self.threshTail_slider.value())
 
             else :
                 msg="no reference for body axe. You can add one with 'tail-root'"
@@ -2169,8 +2489,14 @@ class UIXenopus(QtWidgets.QMainWindow):
             eyeEllipse.yList[:]=[]
 
         self.tailAngleList[:]=[]
-
         self.tailPosList[:]=[]
+
+        for list_name in [
+            "tailAngleListR", "tailAngleListM", "tailAngleListC",
+            "tailPosListR", "tailPosListM", "tailPosListC",
+        ]:
+            if hasattr(self, list_name):
+                getattr(self, list_name)[:]=[]
 
         stimList[:]=[]
 
@@ -2198,7 +2524,19 @@ class UIXenopus(QtWidgets.QMainWindow):
 
             self.w4.plot(dataArray2,pen=self.penOrange,clear=True)
 
-            if len(self.tailAngleList)!=0:
+            first_tail_plot = True
+            for values, pen in [
+                (getattr(self, "tailAngleListR", []), self.penTailR),
+                (getattr(self, "tailAngleListM", []), self.penTailM),
+                (getattr(self, "tailAngleListC", []), self.penTailC),
+            ]:
+                dataArray3 = np.asarray(values[currentIdx-200: currentIdx])
+
+                if dataArray3.size > 0:
+                    self.w5.plot(dataArray3,pen=pen,clear=first_tail_plot)
+                    first_tail_plot = False
+
+            if first_tail_plot and len(self.tailAngleList)!=0:
                 dataArray3 = np.asarray(self.tailAngleList[currentIdx-200: currentIdx])
 
                 self.w5.plot(dataArray3,pen=self.penGreen,clear=True)
@@ -2224,7 +2562,19 @@ class UIXenopus(QtWidgets.QMainWindow):
 
                 self.w7.plot(dataArray5,pen=self.penOrange,clear=True)
 
-                if len(self.tailAngleList)!=0:
+                first_tail_plot = True
+                for values, pen in [
+                    (getattr(self, "tailAngleListR", []), self.penTailR),
+                    (getattr(self, "tailAngleListM", []), self.penTailM),
+                    (getattr(self, "tailAngleListC", []), self.penTailC),
+                ]:
+                    dataArray3 = np.asarray(values)
+
+                    if dataArray3.size > 0:
+                        self.w5.plot(dataArray3,pen=pen,clear=first_tail_plot)
+                        first_tail_plot = False
+
+                if first_tail_plot and len(self.tailAngleList)!=0:
                     dataArray3 = np.asarray(self.tailAngleList)
 
                     self.w5.plot(dataArray3,pen=self.penGreen,clear=True)

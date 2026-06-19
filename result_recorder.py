@@ -64,6 +64,16 @@ class ResultRecorder(threading.Thread):
                 "tail_x",
                 "tail_y",
 
+                "tail_R_angle",
+                "tail_R_x",
+                "tail_R_y",
+                "tail_M_angle",
+                "tail_M_x",
+                "tail_M_y",
+                "tail_C_angle",
+                "tail_C_x",
+                "tail_C_y",
+
                 "okr_active",
                 "okr_pause",
                 "stim_width",
@@ -99,6 +109,16 @@ class ResultRecorder(threading.Thread):
                     self._clean_value(result.tail_angle),
                     self._clean_value(result.tail_x),
                     self._clean_value(result.tail_y),
+
+                    self._clean_value(getattr(result, "tail_R_angle", None)),
+                    self._clean_value(getattr(result, "tail_R_x", None)),
+                    self._clean_value(getattr(result, "tail_R_y", None)),
+                    self._clean_value(getattr(result, "tail_M_angle", None)),
+                    self._clean_value(getattr(result, "tail_M_x", None)),
+                    self._clean_value(getattr(result, "tail_M_y", None)),
+                    self._clean_value(getattr(result, "tail_C_angle", None)),
+                    self._clean_value(getattr(result, "tail_C_x", None)),
+                    self._clean_value(getattr(result, "tail_C_y", None)),
 
                     self._clean_value(okr.get("active", False)),
                     self._clean_value(okr.get("paused", False)),

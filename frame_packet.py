@@ -96,6 +96,20 @@ class TrackingResult:
     # Permet de suivre la position du point de queue dans l'image.
     tail_y: Optional[float] = None
 
+    # Mesures de queue par arcs R / M / C.
+    # R = région droite/proximale, M = milieu, C = région gauche/caudale.
+    tail_R_angle: Optional[float] = None
+    tail_R_x: Optional[float] = None
+    tail_R_y: Optional[float] = None
+
+    tail_M_angle: Optional[float] = None
+    tail_M_x: Optional[float] = None
+    tail_M_y: Optional[float] = None
+
+    tail_C_angle: Optional[float] = None
+    tail_C_x: Optional[float] = None
+    tail_C_y: Optional[float] = None
+
     # État de la stimulation OKR associé à cette frame.
     # Permet de savoir dans quelles conditions expérimentales
     # la mesure a été réalisée.

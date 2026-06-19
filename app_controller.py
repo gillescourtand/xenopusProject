@@ -188,7 +188,11 @@ class AppController(object):
             body_angle=self.varM.bodyAngle,
             kernel_size=self.ui.openKernel_spinbox.value(),
             tail_arc_roi=self.ui.get_tail_arc_roi_params()
-            if hasattr(self.ui, "get_tail_arc_roi_params") else None
+            if hasattr(self.ui, "get_tail_arc_roi_params") else None,
+            tail_arc_rois=self.ui.get_tail_arc_roi_params_all()
+            if hasattr(self.ui, "get_tail_arc_roi_params_all") else None,
+            tail_thresholds=self.ui.get_tail_arc_thresholds()
+            if hasattr(self.ui, "get_tail_arc_thresholds") else None
         )
 
         if self.pipeline is not None:
@@ -222,6 +226,20 @@ class AppController(object):
 
             if result.tail_x is not None and result.tail_y is not None:
                 self.ui.tailPosList.append([result.frame_id, [result.tail_x, result.tail_y]])
+
+            for label in ["R", "M", "C"]:
+                angle = getattr(result, "tail_{}_angle".format(label), None)
+                x_pos = getattr(result, "tail_{}_x".format(label), None)
+                y_pos = getattr(result, "tail_{}_y".format(label), None)
+
+                angle_list = getattr(self.ui, "tailAngleList{}".format(label), None)
+                pos_list = getattr(self.ui, "tailPosList{}".format(label), None)
+
+                if angle is not None and angle_list is not None:
+                    angle_list.append([result.frame_id, angle])
+
+                if x_pos is not None and y_pos is not None and pos_list is not None:
+                    pos_list.append([result.frame_id, [x_pos, y_pos]])
 
         except Exception as exc:
             print("store_result_for_realtime error:", exc)
@@ -307,10 +325,36 @@ class AppController(object):
             if result is None:
                 return
 
-            # Mise à jour du marqueur de queue
-            if result.tail_x is not None and result.tail_y is not None:
+            # Mise à jour des trois marqueurs de queue.
+            # Chaque arc R/M/C possède son propre point détecté et sa droite root -> point.
+            tail_marker = None
+            for label in ["R", "M", "C"]:
+                x_pos = getattr(result, "tail_{}_x".format(label), None)
+                y_pos = getattr(result, "tail_{}_y".format(label), None)
+
+                if x_pos is not None and y_pos is not None:
+                    try:
+                        if hasattr(self.ui, "set_tail_arc_tracking_marker"):
+                            self.ui.set_tail_arc_tracking_marker(label, [x_pos, y_pos])
+                    except Exception as exc:
+                        print("Erreur update tail arc marker {}:".format(label), exc)
+
+                    # Pour le point tail historique, on garde le plus caudal si possible.
+                    if label in ["C", "M", "R"]:
+                        tail_marker = [x_pos, y_pos]
+                else:
+                    try:
+                        if hasattr(self.ui, "set_tail_arc_tracking_marker"):
+                            self.ui.set_tail_arc_tracking_marker(label, None)
+                    except Exception:
+                        pass
+
+            if tail_marker is None and result.tail_x is not None and result.tail_y is not None:
+                tail_marker = [result.tail_x, result.tail_y]
+
+            if tail_marker is not None:
                 try:
-                    self.ui.mark.data['pos'][2] = [result.tail_x, result.tail_y]
+                    self.ui.mark.data['pos'][2] = tail_marker
                     self.ui.mark.updateGraph()
                 except Exception as exc:
                     print("Erreur update tail marker:", exc)
@@ -383,8 +427,21 @@ class AppController(object):
                 if data_eye2.size > 0:
                     self.ui.w4.plot(data_eye2, pen=self.ui.penOrange, clear=True)
 
-            # Tail angle
-            if hasattr(self.ui, "tailAngleList"):
+            # Tail angles R / M / C
+            tail_series = [
+                ("R", getattr(self.ui, "tailAngleListR", []), getattr(self.ui, "penTailR", self.ui.penGreen)),
+                ("M", getattr(self.ui, "tailAngleListM", []), getattr(self.ui, "penTailM", self.ui.penGreen)),
+                ("C", getattr(self.ui, "tailAngleListC", []), getattr(self.ui, "penTailC", self.ui.penGreen)),
+            ]
+
+            first_tail_plot = True
+            for label, values, pen in tail_series:
+                data_tail = np.asarray(values[-200:])
+                if data_tail.size > 0:
+                    self.ui.w5.plot(data_tail, pen=pen, clear=first_tail_plot, name=label)
+                    first_tail_plot = False
+
+            if first_tail_plot and hasattr(self.ui, "tailAngleList"):
                 data_tail = np.asarray(self.ui.tailAngleList[-200:])
                 if data_tail.size > 0:
                     self.ui.w5.plot(data_tail, pen=self.ui.penGreen, clear=True)

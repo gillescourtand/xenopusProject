@@ -120,6 +120,7 @@ def _eye_track_one(image, roi, threshold, body_axis_y, body_angle, kernel_size=9
 
 
 _TAIL_ARC_MASK_CACHE = {}
+_TAIL_ARC_PIXEL_CACHE = {}
 
 
 def _angle_delta_signed(start_angle, end_angle):
@@ -160,8 +161,10 @@ def _tail_arc_crop_mask_cached(image_shape, arc_roi):
     if cached is not None:
         return cached
 
-    # Cache petit : on garde seulement le dernier masque pour éviter une fuite mémoire.
-    _TAIL_ARC_MASK_CACHE.clear()
+    # Cache limité : on garde quelques masques pour permettre plusieurs arcs R/M/C
+    # sans recalculer tous les masques à chaque frame.
+    if len(_TAIL_ARC_MASK_CACHE) > 12:
+        _TAIL_ARC_MASK_CACHE.clear()
 
     margin = 3
 
@@ -208,7 +211,55 @@ def _tail_arc_crop_mask_cached(image_shape, arc_roi):
     return result
 
 
+def _tail_arc_mask_pixels_cached(arc_mask):
+    """
+    Retourne les coordonnées des pixels appartenant à un arc.
+
+    Ces coordonnées sont mises en cache : tant que l'arc ne bouge pas,
+    on évite de recalculer np.nonzero() à chaque frame.
+    """
+    if arc_mask is None:
+        return None, None
+
+    key = id(arc_mask)
+    cached = _TAIL_ARC_PIXEL_CACHE.get(key)
+
+    if cached is not None:
+        return cached
+
+    if len(_TAIL_ARC_PIXEL_CACHE) > 12:
+        _TAIL_ARC_PIXEL_CACHE.clear()
+
+    ys, xs = np.nonzero(arc_mask)
+
+    if ys.size == 0:
+        result = (None, None)
+    else:
+        result = (ys.astype(np.intp, copy=False), xs.astype(np.intp, copy=False))
+
+    _TAIL_ARC_PIXEL_CACHE[key] = result
+    return result
+
+
 def _tail_track_arc_fast(image, tail_threshold, arc_roi, root_position, body_angle):
+    """
+    Tracking rapide d'un arc de queue.
+
+    Version précédente :
+    - seuillage image complète de l'arc ;
+    - dilatation ;
+    - findContours ;
+    - tri des contours ;
+    - moments du plus grand contour.
+
+    Nouvelle version :
+    - le masque de l'arc est pré-calculé et mis en cache ;
+    - on lit uniquement les pixels de l'arc ;
+    - le point détecté est le centre pondéré des pixels sous le seuil.
+
+    Avantage : beaucoup plus rapide pour R/M/C, sans passer en mode latest-frame.
+    Donc on reste en FIFO et on ne saute pas volontairement de frames.
+    """
     if arc_roi is None:
         return None
 
@@ -216,7 +267,7 @@ def _tail_track_arc_fast(image, tail_threshold, arc_roi, root_position, body_ang
 
     crop_box, arc_mask = _tail_arc_crop_mask_cached(image.shape, arc_roi)
 
-    if crop_box is None:
+    if crop_box is None or arc_mask is None:
         return None
 
     x0, y0, x1, y1 = crop_box
@@ -225,22 +276,32 @@ def _tail_track_arc_fast(image, tail_threshold, arc_roi, root_position, body_ang
     if crop.size == 0:
         return None
 
-    th = cv2.threshold(crop, tail_threshold, 255, cv2.THRESH_BINARY_INV)[1]
-    th = cv2.bitwise_and(th, th, mask=arc_mask)
-    th = cv2.dilate(th, None, iterations=5)
+    ys, xs = _tail_arc_mask_pixels_cached(arc_mask)
 
-    contours = cv2.findContours(th.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
-    if len(contours) == 0:
+    if ys is None or xs is None or ys.size == 0:
         return None
 
-    contour = sorted(contours, key=cv2.contourArea, reverse=True)[0]
-    moments = cv2.moments(contour)
+    # Valeurs des pixels uniquement dans l'arc.
+    values = crop[ys, xs].astype(np.int16, copy=False)
 
-    if moments["m00"] == 0:
+    # Pour un fond clair et une queue sombre : pixels < seuil.
+    weights = int(tail_threshold) - values
+    valid = weights > 0
+
+    if not np.any(valid):
         return None
 
-    tail_x_local = int(moments["m10"] / moments["m00"])
-    tail_y_local = int(moments["m01"] / moments["m00"])
+    xs_valid = xs[valid].astype(np.float32, copy=False)
+    ys_valid = ys[valid].astype(np.float32, copy=False)
+    weights_valid = weights[valid].astype(np.float32, copy=False)
+
+    weight_sum = float(np.sum(weights_valid))
+
+    if weight_sum <= 0.0:
+        return None
+
+    tail_x_local = int(np.sum(xs_valid * weights_valid) / weight_sum)
+    tail_y_local = int(np.sum(ys_valid * weights_valid) / weight_sum)
 
     tail_x = tail_x_local + x0
     tail_y = int(img_height) - (tail_y_local + y0)
@@ -320,7 +381,9 @@ def track_frame_opencv(packet,
                        body_axis_y,
                        body_angle,
                        kernel_size=9,
-                       tail_arc_roi=None):
+                       tail_arc_roi=None,
+                       tail_arc_rois=None,
+                       tail_thresholds=None):
     result = TrackingResult(
         frame_id=packet.frame_id,
         timestamp=packet.timestamp,
@@ -368,27 +431,89 @@ def track_frame_opencv(packet,
                 result.eye2_y = eye2["y"]
                 result.metadata["eye2_descriptor"] = eye2["descriptor"]
 
-        if tail_arc_roi is not None:
-            tail = _tail_track_arc_fast(
-                gray,
-                tail_threshold,
-                tail_arc_roi,
-                root_position,
-                body_angle,
-            )
-        else:
-            tail = _tail_track(
-                gray,
-                tail_threshold,
-                tail_region,
-                root_position,
-                body_angle,
-            )
+        # ------------------------------------------------------------------
+        # Tracking queue :
+        # - nouveau mode : 3 arcs R / M / C ;
+        # - ancien mode conservé : un seul arc ou une région rectangulaire.
+        # ------------------------------------------------------------------
+        if tail_arc_rois is not None:
+            labels = ["R", "M", "C"]
+            first_tail = None
 
-        if tail is not None:
-            result.tail_angle = tail["angle"]
-            result.tail_x = tail["x"]
-            result.tail_y = tail["y"]
+            for label in labels:
+                arc_roi = tail_arc_rois.get(label) if isinstance(tail_arc_rois, dict) else None
+
+                if arc_roi is None:
+                    continue
+
+                if isinstance(tail_thresholds, dict):
+                    threshold_value = tail_thresholds.get(label, tail_threshold)
+                else:
+                    threshold_value = tail_threshold
+
+                tail = _tail_track_arc_fast(
+                    gray,
+                    threshold_value,
+                    arc_roi,
+                    root_position,
+                    body_angle,
+                )
+
+                if tail is None:
+                    continue
+
+                setattr(result, "tail_{}_angle".format(label), tail["angle"])
+                setattr(result, "tail_{}_x".format(label), tail["x"])
+                setattr(result, "tail_{}_y".format(label), tail["y"])
+
+                result.metadata["tail_{}_position".format(label)] = [tail["x"], tail["y"]]
+
+                if first_tail is None:
+                    first_tail = tail
+
+            # Compatibilité avec les anciennes colonnes/listes :
+            # on garde la mesure R comme mesure principale si elle existe.
+            # Sinon on prend la première mesure disponible.
+            main_tail = None
+            if getattr(result, "tail_R_angle", None) is not None:
+                main_tail = {
+                    "angle": result.tail_R_angle,
+                    "x": result.tail_R_x,
+                    "y": result.tail_R_y,
+                }
+            elif first_tail is not None:
+                main_tail = first_tail
+
+            if main_tail is not None:
+                result.tail_angle = main_tail["angle"]
+                result.tail_x = main_tail["x"]
+                result.tail_y = main_tail["y"]
+
+        else:
+            if tail_arc_roi is not None:
+                tail = _tail_track_arc_fast(
+                    gray,
+                    tail_threshold,
+                    tail_arc_roi,
+                    root_position,
+                    body_angle,
+                )
+            else:
+                tail = _tail_track(
+                    gray,
+                    tail_threshold,
+                    tail_region,
+                    root_position,
+                    body_angle,
+                )
+
+            if tail is not None:
+                result.tail_angle = tail["angle"]
+                result.tail_x = tail["x"]
+                result.tail_y = tail["y"]
+                result.tail_R_angle = tail["angle"]
+                result.tail_R_x = tail["x"]
+                result.tail_R_y = tail["y"]
 
     except Exception as exc:
         result.valid = False
