@@ -10,6 +10,7 @@ import time
 import re
 
 from realtime_pipeline import RealtimePipeline
+from video_file_analysis import VideoFileAnalysisWorker
 from display_worker import DisplayWorker
 from okr_state import OKRState
 from tracking_opencv import track_frame_opencv
@@ -25,6 +26,7 @@ class AppController(object):
         self.okr_state = OKRState()
         self.pipeline = None
         self.display_worker = None
+        self.video_file_worker = None
         self.last_overlay_frame_id = -1
         
     def _get_spinbox_value(self, widget, attribute_name, default_value):
@@ -195,7 +197,7 @@ class AppController(object):
             if hasattr(self.ui, "get_tail_arc_thresholds") else None
         )
 
-        if self.pipeline is not None:
+        if self.pipeline is not None and getattr(self.pipeline, "running", False):
             self.pipeline.set_latest_result(result)
 
         self.store_result_for_realtime(result)
@@ -244,10 +246,12 @@ class AppController(object):
         except Exception as exc:
             print("store_result_for_realtime error:", exc)
     
-    def _apply_eye_descriptor(self, eye_index, descriptor):
+    def _apply_eye_descriptor(self, eye_index, descriptor, move_roi=True):
         """
         Applique visuellement l'ellipse et l'axe de l'œil.
-        Reprend la logique de l'ancien update_overlay().
+
+        move_roi=True  : mode live, la ROI peut suivre légèrement l'œil.
+        move_roi=False : mode review vidéo, on affiche le résultat sans déplacer les ROIs.
         """
 
         try:
@@ -288,7 +292,7 @@ class AppController(object):
 
             # Recentrage léger de la ROI autour de l'œil détecté
             # Important pour que la zone suive si l'animal bouge un peu.
-            if eye_index < len(self.ui.roisEye):
+            if move_roi and eye_index < len(self.ui.roisEye):
                 roiEye = self.ui.roisEye[eye_index]
                 xroi, yroi = roiEye.pos()
                 wroi, hroi = roiEye.size()
@@ -310,24 +314,21 @@ class AppController(object):
         except Exception as exc:
             print("_apply_eye_descriptor error:", exc)
 
-    def safe_update_overlay(self):
+    def apply_result_overlay(self, result, move_eye_roi=True):
         """
-        Met à jour les overlays visuels à partir du dernier résultat.
-        Important : les données sont stockées à 200 fps ailleurs.
-        Ici, on ne fait que l'affichage à fréquence plus basse.
+        Applique visuellement un TrackingResult sur l'image courante.
+
+        Utilisé à la fois :
+        - en live, via safe_update_overlay ;
+        - en review vidéo importée, quand on navigue frame par frame.
         """
         try:
-            if self.pipeline is None:
-                return
-
-            result = self.pipeline.get_latest_result()
-
             if result is None:
                 return
 
             # Mise à jour des trois marqueurs de queue.
-            # Chaque arc R/M/C possède son propre point détecté et sa droite root -> point.
             tail_marker = None
+
             for label in ["R", "M", "C"]:
                 x_pos = getattr(result, "tail_{}_x".format(label), None)
                 y_pos = getattr(result, "tail_{}_y".format(label), None)
@@ -339,9 +340,8 @@ class AppController(object):
                     except Exception as exc:
                         print("Erreur update tail arc marker {}:".format(label), exc)
 
-                    # Pour le point tail historique, on garde le plus caudal si possible.
-                    if label in ["C", "M", "R"]:
-                        tail_marker = [x_pos, y_pos]
+                    # Point tail historique = le dernier point valide trouvé.
+                    tail_marker = [x_pos, y_pos]
                 else:
                     try:
                         if hasattr(self.ui, "set_tail_arc_tracking_marker"):
@@ -363,19 +363,41 @@ class AppController(object):
             if len(self.ui.roisEllipseEye) > 0 and "eye1_descriptor" in result.metadata:
                 self._apply_eye_descriptor(
                     eye_index=0,
-                    descriptor=result.metadata["eye1_descriptor"]
+                    descriptor=result.metadata["eye1_descriptor"],
+                    move_roi=move_eye_roi
                 )
 
             # Eye 2
             if len(self.ui.roisEllipseEye) > 1 and "eye2_descriptor" in result.metadata:
                 self._apply_eye_descriptor(
                     eye_index=1,
-                    descriptor=result.metadata["eye2_descriptor"]
+                    descriptor=result.metadata["eye2_descriptor"],
+                    move_roi=move_eye_roi
                 )
 
         except Exception as exc:
+            print("apply_result_overlay error:", exc)
+
+    def safe_update_overlay(self):
+        """
+        Met à jour les overlays visuels à partir du dernier résultat.
+        Important : les données sont stockées à 200 fps ailleurs.
+        Ici, on ne fait que l'affichage à fréquence plus basse.
+        """
+        try:
+            if self.pipeline is None:
+                return
+
+            result = self.pipeline.get_latest_result()
+
+            if result is None:
+                return
+
+            self.apply_result_overlay(result, move_eye_roi=True)
+
+        except Exception as exc:
             print("safe_update_overlay error:", exc)
-            
+
     def _update_eye_roi_from_descriptor(self, eye_index, descriptor):
         """
         Recentre la ROI de l'œil autour du centre détecté.
@@ -672,6 +694,93 @@ class AppController(object):
         filename = "{}{:03d}.csv".format(file_prefix, track_number)
 
         return os.path.join(output_dir, filename)
+
+    def start_video_file_analysis(self, video_path, result_file_path=None, video_crop=None):
+        """
+        Lance l'analyse d'une vidéo importée.
+
+        Le tracking n'est pas dupliqué : on réutilise tracking_adapter().
+        """
+        if self.pipeline is not None and self.pipeline.running:
+            raise RuntimeError("Le tracking live est déjà en cours.")
+
+        if self.video_file_worker is not None:
+            status = self.video_file_worker.get_status()
+
+            if status.get("running", False):
+                raise RuntimeError("Une analyse vidéo est déjà en cours.")
+
+        result_file_path = result_file_path or self.preview_next_result_file_path()
+
+        metadata = self._get_result_metadata()
+        metadata["analysis_source"] = "video_file"
+        metadata["video_path"] = video_path
+
+        if video_crop:
+            metadata["video_crop_x"] = video_crop.get("x", "")
+            metadata["video_crop_y"] = video_crop.get("y", "")
+            metadata["video_crop_width"] = video_crop.get("width", "")
+            metadata["video_crop_height"] = video_crop.get("height", "")
+
+        self.video_file_worker = VideoFileAnalysisWorker(
+            controller=self,
+            video_path=video_path,
+            result_file_path=result_file_path,
+            metadata=metadata,
+            video_crop=video_crop,
+        )
+        self.video_file_worker.start()
+
+        print("Video-file analysis started")
+        print("Video:", video_path)
+        print("Result file:", result_file_path)
+
+    def stop_video_file_analysis(self):
+        if self.video_file_worker is not None:
+            try:
+                self.video_file_worker.stop()
+            except Exception:
+                pass
+
+    def get_video_file_analysis_status(self):
+        if self.video_file_worker is None:
+            return {
+                "running": False,
+                "done": False,
+                "stopped": False,
+                "error": "",
+                "progress": 0.0,
+                "frame_id": 0,
+                "total_frames": 0,
+                "rows_written": 0,
+            }
+
+        try:
+            return self.video_file_worker.get_status()
+        except Exception:
+            return {
+                "running": False,
+                "done": False,
+                "stopped": False,
+                "error": "status unavailable",
+                "progress": 0.0,
+                "frame_id": 0,
+                "total_frames": 0,
+                "rows_written": 0,
+            }
+
+    def get_video_file_result(self, frame_id):
+        """
+        Récupère le résultat d'une frame analysée en mode vidéo importée.
+        """
+        try:
+            if self.video_file_worker is None:
+                return None
+
+            return self.video_file_worker.get_result(frame_id)
+
+        except Exception:
+            return None
 
     def get_stats(self):
         if self.pipeline is None:

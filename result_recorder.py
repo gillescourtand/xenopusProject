@@ -60,9 +60,6 @@ class ResultRecorder(threading.Thread):
                 "eye2_angle",
                 "eye1_y",
                 "eye2_y",
-                "tail_angle",
-                "tail_x",
-                "tail_y",
 
                 "tail_R_angle",
                 "tail_R_x",
@@ -106,9 +103,6 @@ class ResultRecorder(threading.Thread):
                     self._clean_value(result.eye2_angle),
                     self._clean_value(result.eye1_y),
                     self._clean_value(result.eye2_y),
-                    self._clean_value(result.tail_angle),
-                    self._clean_value(result.tail_x),
-                    self._clean_value(result.tail_y),
 
                     self._clean_value(getattr(result, "tail_R_angle", None)),
                     self._clean_value(getattr(result, "tail_R_x", None)),

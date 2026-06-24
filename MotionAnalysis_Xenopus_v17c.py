@@ -1090,6 +1090,20 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.result_save_dir = None
         self.controller = None
 
+        # Interface vidéo importée.
+        self.imported_video_path = None
+        self.imported_video_frame = None
+        self.imported_video_total_frames = 0
+        self.imported_video_raw_width = 0
+        self.imported_video_raw_height = 0
+        self.imported_review_last_auto_frame = -1
+        self.imported_review_ignore_signals = False
+
+        # Layout spécial du mode Imported video :
+        # les docks camera/player sont compressés et l'image prend la place libérée.
+        self._live_dock_height_cache = {}
+        self._video_mode_image_height = 430
+
         self.plot_timer = QTimer()
         self.plot_timer.setInterval(300)
         self.plot_timer.timeout.connect(self.update_plot)
@@ -1115,6 +1129,10 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.initUI()
 
+        self.video_file_status_timer = QTimer()
+        self.video_file_status_timer.setInterval(250)
+        self.video_file_status_timer.timeout.connect(self.update_imported_video_status)
+
     def initUI(self):
 
         self.setWindowIcon(QtgGui.QIcon(os.path.join('Imagys_blue', 'logoAnimotion-square-112.png')))
@@ -1123,6 +1141,35 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.setCentralWidget(self.area)
         self.resize(1500,800)
         self.setWindowTitle('Xenopus project - beta')
+
+        # Sélecteur global du mode d'analyse.
+        # Il évite d'avoir le live/caméra et la vidéo importée actifs en même temps.
+        self.analysis_mode = "live"
+        self.analysisMode_toolbar = self.addToolBar("Analysis mode")
+        self.analysisMode_toolbar.setMovable(False)
+
+        self.analysisMode_label = QtWidgets.QLabel("Analysis mode: ")
+
+        # Onglets globaux en haut de la fenêtre.
+        # Plus clair qu'un petit menu déroulant : un seul mode actif à la fois.
+        self.analysisMode_tabs = QtWidgets.QTabBar()
+        self.analysisMode_tabs.addTab("Real-time camera")
+        self.analysisMode_tabs.addTab("Imported video")
+        self.analysisMode_tabs.setExpanding(False)
+        self.analysisMode_tabs.setDrawBase(False)
+        self.analysisMode_tabs.setToolTip(
+            "Choose the analysis mode. Only one mode can be active at a time."
+        )
+        self.analysisMode_tabs.currentChanged.connect(self.on_analysis_mode_changed)
+
+        self.analysisMode_toolbar.addWidget(self.analysisMode_label)
+        self.analysisMode_toolbar.addWidget(self.analysisMode_tabs)
+
+        # Barre dédiée au mode vidéo importée.
+        # Elle est masquée en mode temps réel, donc l'interface ne montre pas les deux modes en même temps.
+        self.importedVideo_toolbar = self.addToolBar("Imported video tools")
+        self.importedVideo_toolbar.setMovable(False)
+        self.importedVideo_toolbar.hide()
 
         self.penCyan=pg.mkPen((0,255,255), width=2)
         self.penOrange=pg.mkPen((255,128,0), width=2)
@@ -1147,6 +1194,8 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.d10 = Dock("Segmentation settings", size=(500,200))
         self.d11 = Dock("video Capture ",size=(500,200))
         self.d13 = Dock("Optokinetic", size=(500,200))
+        self.d14 = Dock("Video file analysis", size=(500,200))
+        self.d15 = Dock("Imported video progress", size=(1000,205))
 
         self.area.addDock(self.d1, 'left')
         self.area.addDock(self.d2, 'bottom', self.d1)
@@ -1156,11 +1205,15 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.area.addDock(self.d6, 'bottom', self.d5)
         self.area.addDock(self.d7, 'bottom', self.d6)
 
-        self.area.addDock(self.d11, 'bottom', self.d1)
+        self.area.addDock(self.d15, 'bottom', self.d1)
+        self.area.addDock(self.d11, 'bottom', self.d15)
         self.area.addDock(self.d9, 'above', self.d11)
         self.area.addDock(self.d10, 'above', self.d2)
         self.area.addDock(self.d8, 'above', self.d10)
         self.area.addDock(self.d13, 'above', self.d2)
+        # Le dock d14 n'est plus ajouté dans le DockArea.
+        # Les contrôles vidéo importée sont maintenant dans une barre dédiée en haut,
+        # visible uniquement en mode Imported video.
 
         self.d1.addWidget(self.videoDisplay_Widget)
 
@@ -1337,144 +1390,159 @@ class UIXenopus(QtWidgets.QMainWindow):
             }
         """)
 
-        splitter_ThreshTail=QtWidgets.QWidget()
-        tailSplitter_label= QtWidgets.QLabel(splitter_ThreshTail)
-        tailSplitter_label.setText("Segments")
+        splitter_ThreshTail = QtWidgets.QWidget()
 
-        tailSegNumber_label= QtWidgets.QLabel(splitter_ThreshTail)
-        tailSegNumber_label.setText("number")
-        self.tailSegNumber_spinBox =  QtWidgets.QSpinBox(splitter_ThreshTail)
-        self.tailSegNumber_spinBox.setValue(1)
-        self.tailSegNumber_spinBox.setMinimum(1)
-        self.tailSegNumber_spinBox.setMaximum(12)
-        self.tailSegNumber_spinBox.valueChanged.connect(self.update_tail_segment_overlay)
+        # Choix des arcs à afficher et à analyser.
+        # Par défaut : R actif, M et C inactifs.
+        self.tailArcR_checkBox = QtWidgets.QCheckBox("R", splitter_ThreshTail)
+        self.tailArcM_checkBox = QtWidgets.QCheckBox("M", splitter_ThreshTail)
+        self.tailArcC_checkBox = QtWidgets.QCheckBox("C", splitter_ThreshTail)
+        self.tailArcR_checkBox.setChecked(True)
+        self.tailArcM_checkBox.setChecked(False)
+        self.tailArcC_checkBox.setChecked(False)
 
-        tailSegSize_label= QtWidgets.QLabel(splitter_ThreshTail)
-        tailSegSize_label.setText("size")
+        for checkbox in [self.tailArcR_checkBox, self.tailArcM_checkBox, self.tailArcC_checkBox]:
+            checkbox.stateChanged.connect(self.update_tail_arc_enabled_states)
 
-        self.tailSegSize_spinBox =  QtWidgets.QSpinBox(splitter_ThreshTail)
-        self.tailSegSize_spinBox.setValue(6)
-        self.tailSegSize_spinBox.setMinimum(6)
-        self.tailSegSize_spinBox.setMaximum
-        self.tailSegSize_spinBox.valueChanged.connect(self.update_tail_segment_overlay)
-
-        threshTailSlider_label= QtWidgets.QLabel(splitter_ThreshTail)
-        threshTailSlider_label.setText("R thresh")
-        threshTailValue_label = QtWidgets.QLabel(splitter_ThreshTail)
-        threshTailValue_label.setText("00")
-        threshTailValue_label.setAlignment(Qt.AlignCenter)
+        self.threshTailSlider_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.threshTailSlider_label.setText("R thresh")
+        self.threshTailValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.threshTailValue_label.setText("00")
+        self.threshTailValue_label.setAlignment(Qt.AlignCenter)
         self.threshTail_slider = QtWidgets.QSlider(splitter_ThreshTail)
         self.threshTail_slider.setMaximum(255)
         self.threshTail_slider.setPageStep(10)
         self.threshTail_slider.setOrientation(Qt.Horizontal)
-        self.threshTail_slider.valueChanged.connect(threshTailValue_label.setNum)
+        self.threshTail_slider.valueChanged.connect(self.threshTailValue_label.setNum)
         self.threshTail_slider.valueChanged.connect(self.update_tail_segment_thresh)
 
-        threshTailMSlider_label= QtWidgets.QLabel(splitter_ThreshTail)
-        threshTailMSlider_label.setText("M thresh")
-        threshTailMValue_label = QtWidgets.QLabel(splitter_ThreshTail)
-        threshTailMValue_label.setText("00")
-        threshTailMValue_label.setAlignment(Qt.AlignCenter)
+        self.threshTailMSlider_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.threshTailMSlider_label.setText("M thresh")
+        self.threshTailMValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.threshTailMValue_label.setText("00")
+        self.threshTailMValue_label.setAlignment(Qt.AlignCenter)
         self.threshTailM_slider = QtWidgets.QSlider(splitter_ThreshTail)
         self.threshTailM_slider.setMaximum(255)
         self.threshTailM_slider.setPageStep(10)
         self.threshTailM_slider.setOrientation(Qt.Horizontal)
-        self.threshTailM_slider.valueChanged.connect(threshTailMValue_label.setNum)
+        self.threshTailM_slider.valueChanged.connect(self.threshTailMValue_label.setNum)
         self.threshTailM_slider.valueChanged.connect(self.update_tail_segment_thresh)
 
-        threshTailCSlider_label= QtWidgets.QLabel(splitter_ThreshTail)
-        threshTailCSlider_label.setText("C thresh")
-        threshTailCValue_label = QtWidgets.QLabel(splitter_ThreshTail)
-        threshTailCValue_label.setText("00")
-        threshTailCValue_label.setAlignment(Qt.AlignCenter)
+        self.threshTailCSlider_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.threshTailCSlider_label.setText("C thresh")
+        self.threshTailCValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.threshTailCValue_label.setText("00")
+        self.threshTailCValue_label.setAlignment(Qt.AlignCenter)
         self.threshTailC_slider = QtWidgets.QSlider(splitter_ThreshTail)
         self.threshTailC_slider.setMaximum(255)
         self.threshTailC_slider.setPageStep(10)
         self.threshTailC_slider.setOrientation(Qt.Horizontal)
-        self.threshTailC_slider.valueChanged.connect(threshTailCValue_label.setNum)
+        self.threshTailC_slider.valueChanged.connect(self.threshTailCValue_label.setNum)
         self.threshTailC_slider.valueChanged.connect(self.update_tail_segment_thresh)
 
-        tailArcCurveR_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurveR_label.setText("R curve")
+        self.tailArcCurveR_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.tailArcCurveR_label.setText("R curve")
         self.tailArcCurveR_slider = QtWidgets.QSlider(splitter_ThreshTail)
         self.tailArcCurveR_slider.setMinimum(0)
         self.tailArcCurveR_slider.setMaximum(100)
         self.tailArcCurveR_slider.setPageStep(5)
         self.tailArcCurveR_slider.setOrientation(Qt.Horizontal)
         self.tailArcCurveR_slider.setValue(40)
-        tailArcCurveRValue_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurveRValue_label.setText("40")
-        tailArcCurveRValue_label.setAlignment(Qt.AlignCenter)
-        self.tailArcCurveR_slider.valueChanged.connect(tailArcCurveRValue_label.setNum)
+        self.tailArcCurveRValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.tailArcCurveRValue_label.setText("40")
+        self.tailArcCurveRValue_label.setAlignment(Qt.AlignCenter)
+        self.tailArcCurveR_slider.valueChanged.connect(self.tailArcCurveRValue_label.setNum)
         self.tailArcCurveR_slider.valueChanged.connect(self.update_tail_arc_curve_R)
 
-        tailArcCurveM_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurveM_label.setText("M curve")
+        self.tailArcCurveM_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.tailArcCurveM_label.setText("M curve")
         self.tailArcCurveM_slider = QtWidgets.QSlider(splitter_ThreshTail)
         self.tailArcCurveM_slider.setMinimum(0)
         self.tailArcCurveM_slider.setMaximum(100)
         self.tailArcCurveM_slider.setPageStep(5)
         self.tailArcCurveM_slider.setOrientation(Qt.Horizontal)
         self.tailArcCurveM_slider.setValue(40)
-        tailArcCurveMValue_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurveMValue_label.setText("40")
-        tailArcCurveMValue_label.setAlignment(Qt.AlignCenter)
-        self.tailArcCurveM_slider.valueChanged.connect(tailArcCurveMValue_label.setNum)
+        self.tailArcCurveMValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.tailArcCurveMValue_label.setText("40")
+        self.tailArcCurveMValue_label.setAlignment(Qt.AlignCenter)
+        self.tailArcCurveM_slider.valueChanged.connect(self.tailArcCurveMValue_label.setNum)
         self.tailArcCurveM_slider.valueChanged.connect(self.update_tail_arc_curve_M)
 
-        tailArcCurveC_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurveC_label.setText("C curve")
+        self.tailArcCurveC_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.tailArcCurveC_label.setText("C curve")
         self.tailArcCurveC_slider = QtWidgets.QSlider(splitter_ThreshTail)
         self.tailArcCurveC_slider.setMinimum(0)
         self.tailArcCurveC_slider.setMaximum(100)
         self.tailArcCurveC_slider.setPageStep(5)
         self.tailArcCurveC_slider.setOrientation(Qt.Horizontal)
         self.tailArcCurveC_slider.setValue(40)
-        tailArcCurveCValue_label = QtWidgets.QLabel(splitter_ThreshTail)
-        tailArcCurveCValue_label.setText("40")
-        tailArcCurveCValue_label.setAlignment(Qt.AlignCenter)
-        self.tailArcCurveC_slider.valueChanged.connect(tailArcCurveCValue_label.setNum)
+        self.tailArcCurveCValue_label = QtWidgets.QLabel(splitter_ThreshTail)
+        self.tailArcCurveCValue_label.setText("40")
+        self.tailArcCurveCValue_label.setAlignment(Qt.AlignCenter)
+        self.tailArcCurveC_slider.valueChanged.connect(self.tailArcCurveCValue_label.setNum)
         self.tailArcCurveC_slider.valueChanged.connect(self.update_tail_arc_curve_C)
 
         # Compatibilité avec l'ancien code : tailArcCurve_slider pointe vers R.
         self.tailArcCurve_slider = self.tailArcCurveR_slider
 
-        # Layout compact pour les 3 arcs de queue.
-        # Avant : tous les contrôles étaient sur une seule ligne, donc il manquait de place.
-        # Maintenant :
-        # ligne 0 = paramètres généraux
-        # ligne 1 = seuils R/M/C
-        # ligne 2 = courbures R/M/C
+        self.tailArcControlWidgets = {
+            "R": [
+                self.threshTailSlider_label,
+                self.threshTailValue_label,
+                self.threshTail_slider,
+                self.tailArcCurveR_label,
+                self.tailArcCurveRValue_label,
+                self.tailArcCurveR_slider,
+            ],
+            "M": [
+                self.threshTailMSlider_label,
+                self.threshTailMValue_label,
+                self.threshTailM_slider,
+                self.tailArcCurveM_label,
+                self.tailArcCurveMValue_label,
+                self.tailArcCurveM_slider,
+            ],
+            "C": [
+                self.threshTailCSlider_label,
+                self.threshTailCValue_label,
+                self.threshTailC_slider,
+                self.tailArcCurveC_label,
+                self.tailArcCurveCValue_label,
+                self.tailArcCurveC_slider,
+            ],
+        }
+
+        # Layout compact : ligne 0 = activation R/M/C,
+        # ligne 1 = seuils, ligne 2 = courbures.
         tailGrid = QtWidgets.QGridLayout(splitter_ThreshTail)
         tailGrid.setContentsMargins(0, 0, 0, 0)
         tailGrid.setHorizontalSpacing(6)
         tailGrid.setVerticalSpacing(4)
 
-        tailGrid.addWidget(tailSplitter_label, 0, 0)
-        tailGrid.addWidget(tailSegNumber_label, 0, 1)
-        tailGrid.addWidget(self.tailSegNumber_spinBox, 0, 2)
-        tailGrid.addWidget(tailSegSize_label, 0, 3)
-        tailGrid.addWidget(self.tailSegSize_spinBox, 0, 4)
-        tailGrid.setColumnStretch(5, 1)
+        tailGrid.addWidget(QtWidgets.QLabel("Track arcs"), 0, 0)
+        tailGrid.addWidget(self.tailArcR_checkBox, 0, 1)
+        tailGrid.addWidget(self.tailArcM_checkBox, 0, 3)
+        tailGrid.addWidget(self.tailArcC_checkBox, 0, 6)
+        tailGrid.setColumnStretch(8, 1)
 
-        tailGrid.addWidget(threshTailSlider_label, 1, 0)
-        tailGrid.addWidget(threshTailValue_label, 1, 1)
+        tailGrid.addWidget(self.threshTailSlider_label, 1, 0)
+        tailGrid.addWidget(self.threshTailValue_label, 1, 1)
         tailGrid.addWidget(self.threshTail_slider, 1, 2)
-        tailGrid.addWidget(threshTailMSlider_label, 1, 3)
-        tailGrid.addWidget(threshTailMValue_label, 1, 4)
+        tailGrid.addWidget(self.threshTailMSlider_label, 1, 3)
+        tailGrid.addWidget(self.threshTailMValue_label, 1, 4)
         tailGrid.addWidget(self.threshTailM_slider, 1, 5)
-        tailGrid.addWidget(threshTailCSlider_label, 1, 6)
-        tailGrid.addWidget(threshTailCValue_label, 1, 7)
+        tailGrid.addWidget(self.threshTailCSlider_label, 1, 6)
+        tailGrid.addWidget(self.threshTailCValue_label, 1, 7)
         tailGrid.addWidget(self.threshTailC_slider, 1, 8)
 
-        tailGrid.addWidget(tailArcCurveR_label, 2, 0)
-        tailGrid.addWidget(tailArcCurveRValue_label, 2, 1)
+        tailGrid.addWidget(self.tailArcCurveR_label, 2, 0)
+        tailGrid.addWidget(self.tailArcCurveRValue_label, 2, 1)
         tailGrid.addWidget(self.tailArcCurveR_slider, 2, 2)
-        tailGrid.addWidget(tailArcCurveM_label, 2, 3)
-        tailGrid.addWidget(tailArcCurveMValue_label, 2, 4)
+        tailGrid.addWidget(self.tailArcCurveM_label, 2, 3)
+        tailGrid.addWidget(self.tailArcCurveMValue_label, 2, 4)
         tailGrid.addWidget(self.tailArcCurveM_slider, 2, 5)
-        tailGrid.addWidget(tailArcCurveC_label, 2, 6)
-        tailGrid.addWidget(tailArcCurveCValue_label, 2, 7)
+        tailGrid.addWidget(self.tailArcCurveC_label, 2, 6)
+        tailGrid.addWidget(self.tailArcCurveCValue_label, 2, 7)
         tailGrid.addWidget(self.tailArcCurveC_slider, 2, 8)
 
         for stretch_col in [2, 5, 8]:
@@ -1512,6 +1580,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.tailArcCurve_slider.setValue(40)
         self.threshEye1_slider.setValue(60)
         self.threshEye2_slider.setValue(60)
+        self.update_tail_arc_enabled_states(update_preview=False)
 
         resetPlots_btn = QtWidgets.QPushButton('Reset plots')
         resetPlots_btn.clicked.connect(self.reset_Plot)
@@ -1755,6 +1824,210 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.d9.addWidget(self.videoPlayer_Widget)
         self.d13.addWidget(self.optokinetic_Widget)
 
+        # ------------------------------------------------------------------
+        # Interface dédiée à l'analyse d'une vidéo importée.
+        # Elle est volontairement séparée du video player et de la capture caméra.
+        # ------------------------------------------------------------------
+        self.w14 = pg.LayoutWidget()
+
+        self.videoFileHelp_label = QtWidgets.QLabel(
+            "Imported video analysis: open a video, place the same ROIs/arcs on the image, then analyze all frames."
+        )
+        self.videoFileHelp_label.setWordWrap(True)
+
+        self.openImportedVideo_btn = QtWidgets.QPushButton("Open video")
+        self.openImportedVideo_btn.clicked.connect(self.choose_imported_video_file)
+
+        self.importedVideoPath_label = QtWidgets.QLabel("No video selected")
+        self.importedVideoPath_label.setWordWrap(True)
+
+        self.showDirectInterface_btn = QtWidgets.QPushButton("Back to real-time")
+        self.showDirectInterface_btn.clicked.connect(self.show_direct_interface)
+
+        self.startImportedVideo_btn = QtWidgets.QPushButton("Analyze")
+        self.startImportedVideo_btn.clicked.connect(self.start_imported_video_analysis)
+        self.startImportedVideo_btn.setMinimumHeight(28)
+
+        self.stopImportedVideo_btn = QtWidgets.QPushButton("Stop")
+        self.stopImportedVideo_btn.clicked.connect(self.stop_imported_video_analysis)
+        self.stopImportedVideo_btn.setEnabled(False)
+        self.stopImportedVideo_btn.setMinimumHeight(28)
+
+        self.importedVideoProgress = QtWidgets.QProgressBar()
+        self.importedVideoProgress.setRange(0, 100)
+        self.importedVideoProgress.setValue(0)
+
+        self.importedVideoStatus_label = QtWidgets.QLabel("Video mode: idle")
+        self.importedVideoStatus_label.setWordWrap(True)
+
+        self.previewDuringAnalysis_ckb = QtWidgets.QCheckBox("Preview while analyzing")
+        self.previewDuringAnalysis_ckb.setChecked(True)
+        self.previewDuringAnalysis_ckb.setToolTip(
+            "Show the currently analyzed frame with tracking overlays during imported video analysis."
+        )
+
+        self.reviewFramePrev_btn = QtWidgets.QPushButton("◀")
+        self.reviewFramePrev_btn.setMaximumWidth(38)
+        self.reviewFramePrev_btn.clicked.connect(self.review_imported_video_previous_frame)
+
+        self.reviewFrameNext_btn = QtWidgets.QPushButton("▶")
+        self.reviewFrameNext_btn.setMaximumWidth(38)
+        self.reviewFrameNext_btn.clicked.connect(self.review_imported_video_next_frame)
+
+        self.reviewFrameSlider = QtWidgets.QSlider(Qt.Horizontal)
+        self.reviewFrameSlider.setRange(0, 0)
+        self.reviewFrameSlider.setEnabled(False)
+        self.reviewFrameSlider.valueChanged.connect(self.on_review_frame_slider_changed)
+
+        self.reviewFrameSpin = QtWidgets.QSpinBox()
+        self.reviewFrameSpin.setRange(0, 0)
+        self.reviewFrameSpin.setEnabled(False)
+        self.reviewFrameSpin.valueChanged.connect(self.on_review_frame_spin_changed)
+
+        self.reviewFrameLabel = QtWidgets.QLabel("Review frame")
+        self.reviewFrameLabel.setMinimumWidth(85)
+
+        self.videoCropEnable_ckb = QtWidgets.QCheckBox("Use video crop")
+        self.videoCropEnable_ckb.setChecked(True)
+        self.videoCropEnable_ckb.setToolTip(
+            "Analyze only the selected region of the imported video."
+        )
+
+        # Crop vidéo importée : mêmes contrôles que la navigation caméra,
+        # mais sans champ numérique éditable.
+        # On garde des labels de valeur + sliders horizontaux.
+        self.videoCropFrameWidth_value = QtWidgets.QLabel("00")
+        self.videoCropFrameHeight_value = QtWidgets.QLabel("00")
+        self.videoCropOffsetX_value = QtWidgets.QLabel("00")
+        self.videoCropOffsetY_value = QtWidgets.QLabel("00")
+
+        self.videoCropFrameWidth_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.videoCropFrameHeight_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.videoCropOffsetX_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self.videoCropOffsetY_slider = QtWidgets.QSlider(Qt.Horizontal)
+
+        for value_label in [
+            self.videoCropFrameWidth_value,
+            self.videoCropFrameHeight_value,
+            self.videoCropOffsetX_value,
+            self.videoCropOffsetY_value,
+        ]:
+            value_label.setMinimumWidth(42)
+            value_label.setAlignment(Qt.AlignCenter)
+
+        for slider in [
+            self.videoCropFrameWidth_slider,
+            self.videoCropFrameHeight_slider,
+            self.videoCropOffsetX_slider,
+            self.videoCropOffsetY_slider,
+        ]:
+            slider.setRange(0, 99999)
+            slider.setPageStep(10)
+            slider.valueChanged.connect(self.update_imported_video_crop_labels)
+
+        self.videoCropApply_btn = QtWidgets.QPushButton("Apply crop")
+        self.videoCropApply_btn.setMaximumWidth(95)
+        self.videoCropApply_btn.clicked.connect(self.apply_imported_video_crop)
+
+        self.videoCropReset_btn = QtWidgets.QPushButton("Full frame")
+        self.videoCropReset_btn.setMaximumWidth(95)
+        self.videoCropReset_btn.clicked.connect(self.reset_imported_video_crop)
+
+        self.videoFileNote_label = QtWidgets.QLabel(
+            "This tab does not use the camera capture dock or the video player dock. "
+            "It reuses the same tracking code as live mode, including R/M/C arcs, thresholds, curves, and CSV output."
+        )
+        self.videoFileNote_label.setWordWrap(True)
+
+        self.w14.addWidget(self.videoFileHelp_label, row=0, col=0, colspan=4)
+        self.w14.addWidget(self.openImportedVideo_btn, row=1, col=0)
+        self.w14.addWidget(self.importedVideoPath_label, row=1, col=1, colspan=3)
+        self.w14.addWidget(self.startImportedVideo_btn, row=2, col=0)
+        self.w14.addWidget(self.stopImportedVideo_btn, row=2, col=1)
+        self.w14.addWidget(self.showDirectInterface_btn, row=2, col=2)
+        self.w14.addWidget(self.importedVideoProgress, row=3, col=0, colspan=4)
+        self.w14.addWidget(self.importedVideoStatus_label, row=4, col=0, colspan=4)
+        self.w14.addWidget(self.videoFileNote_label, row=5, col=0, colspan=4)
+
+        self.d14.addWidget(self.w14)
+
+        # Barre de progression dédiée placée juste sous l'image en mode Imported video.
+        self.importedProgressWidget = QtWidgets.QWidget()
+        self.importedProgressLayout = QtWidgets.QGridLayout(self.importedProgressWidget)
+        self.importedProgressLayout.setContentsMargins(8, 4, 8, 4)
+        self.importedProgressLayout.setHorizontalSpacing(8)
+        self.importedProgressLayout.setVerticalSpacing(3)
+
+        self.importedProgressTitle_label = QtWidgets.QLabel("Imported video")
+        self.importedProgressTitle_label.setMinimumWidth(95)
+
+        # Ligne 0 : actions vidéo
+        self.importedProgressLayout.addWidget(self.importedProgressTitle_label, 0, 0)
+        self.importedProgressLayout.addWidget(self.openImportedVideo_btn, 0, 1)
+        self.importedProgressLayout.addWidget(self.importedVideoPath_label, 0, 2, 1, 2)
+        self.importedProgressLayout.addWidget(self.startImportedVideo_btn, 0, 4)
+        self.importedProgressLayout.addWidget(self.stopImportedVideo_btn, 0, 5)
+
+        # Ligne 1 : progression
+        self.importedProgressLayout.addWidget(self.importedVideoProgress, 1, 0, 1, 4)
+        self.importedProgressLayout.addWidget(self.importedVideoStatus_label, 1, 4, 1, 2)
+
+        # Ligne 2 : navigation frame par frame après / pendant analyse
+        self.importedProgressLayout.addWidget(self.reviewFrameLabel, 2, 0)
+        self.importedProgressLayout.addWidget(self.reviewFramePrev_btn, 2, 1)
+        self.importedProgressLayout.addWidget(self.reviewFrameSlider, 2, 2, 1, 2)
+        self.importedProgressLayout.addWidget(self.reviewFrameSpin, 2, 4)
+        self.importedProgressLayout.addWidget(self.reviewFrameNext_btn, 2, 5)
+        self.importedProgressLayout.addWidget(self.previewDuringAnalysis_ckb, 3, 0, 1, 6)
+
+        # Lignes 4 à 7 : crop de la vidéo importée.
+        # Plus de QSpinBox visibles : labels + barres de navigation.
+        self.importedProgressLayout.addWidget(self.videoCropEnable_ckb, 4, 0)
+        self.importedProgressLayout.addWidget(QtWidgets.QLabel("frame width"), 4, 1)
+        self.importedProgressLayout.addWidget(self.videoCropFrameWidth_value, 4, 2)
+        self.importedProgressLayout.addWidget(self.videoCropFrameWidth_slider, 4, 3, 1, 2)
+        self.importedProgressLayout.addWidget(self.videoCropApply_btn, 4, 5)
+
+        self.importedProgressLayout.addWidget(QtWidgets.QLabel("frame height"), 5, 1)
+        self.importedProgressLayout.addWidget(self.videoCropFrameHeight_value, 5, 2)
+        self.importedProgressLayout.addWidget(self.videoCropFrameHeight_slider, 5, 3, 1, 2)
+        self.importedProgressLayout.addWidget(self.videoCropReset_btn, 5, 5)
+
+        self.importedProgressLayout.addWidget(QtWidgets.QLabel("offset x"), 6, 1)
+        self.importedProgressLayout.addWidget(self.videoCropOffsetX_value, 6, 2)
+        self.importedProgressLayout.addWidget(self.videoCropOffsetX_slider, 6, 3, 1, 2)
+
+        self.importedProgressLayout.addWidget(QtWidgets.QLabel("offset y"), 7, 1)
+        self.importedProgressLayout.addWidget(self.videoCropOffsetY_value, 7, 2)
+        self.importedProgressLayout.addWidget(self.videoCropOffsetY_slider, 7, 3, 1, 2)
+
+        self.importedProgressLayout.setColumnStretch(3, 1)
+        self.importedProgressLayout.setColumnStretch(4, 1)
+
+        self.d15.addWidget(self.importedProgressWidget)
+
+        # Les contrôles vidéo importée ne sont plus dans la toolbar du haut.
+        # Ils sont placés dans le bandeau juste sous l'image, avec la progression.
+        # La toolbar reste inutilisée pour éviter une interface haute trop chargée.
+        try:
+            self.importedVideoPath_label.setMinimumWidth(260)
+            self.importedVideoProgress.setMinimumHeight(18)
+            self.importedVideoStatus_label.setMinimumWidth(320)
+            self.openImportedVideo_btn.setMaximumWidth(120)
+            self.startImportedVideo_btn.setMaximumWidth(95)
+            self.stopImportedVideo_btn.setMaximumWidth(70)
+        except Exception:
+            pass
+
+        # Démarrage par défaut en mode live/direct.
+        # Le dock vidéo importée est masqué tant que le mode Imported video n'est pas choisi.
+        try:
+            self._set_dock_clean_visible(self.d15, False)
+        except Exception:
+            pass
+
+        self.set_analysis_mode("live", update_combo=True)
+
         self.d8.raiseDock()
 
         self.d11.raiseDock()
@@ -1931,20 +2204,73 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.mark.size=8
         self.mark.setData(pos=pos, adj=adj, pen=lines, size=self.mark.size, symbolBrush=symbolBrushes,symbolPen='w',symbol=symbols, pxMode=False, text=texts)
 
+    def is_tail_arc_enabled(self, label):
+        """
+        Indique si l'arc R/M/C est actif.
+        Un arc décoché est masqué et n'est pas envoyé au tracking.
+        """
+        label = str(label).upper()
+        checkbox = getattr(self, "tailArc{}_checkBox".format(label), None)
+
+        if checkbox is None:
+            return True
+
+        return bool(checkbox.isChecked())
+
+    def update_tail_arc_enabled_states(self, *args, update_preview=True):
+        """
+        Synchronise les checkbox R/M/C avec :
+        - l'état enabled des sliders thresh / curve ;
+        - la visibilité des arcs ;
+        - les marqueurs de tracking.
+        """
+        try:
+            for label in ["R", "M", "C"]:
+                enabled = self.is_tail_arc_enabled(label)
+
+                for widget in getattr(self, "tailArcControlWidgets", {}).get(label, []):
+                    try:
+                        widget.setEnabled(enabled)
+                    except Exception:
+                        pass
+
+                roi = self.get_tail_arc_rois().get(label)
+                if roi is not None:
+                    try:
+                        roi.set_visible(enabled and roi.initialized)
+                    except Exception:
+                        pass
+
+                if not enabled:
+                    self.set_tail_arc_tracking_marker(label, None)
+
+            if update_preview and not self.track_checkBox.isChecked():
+                if self.selectTailRoot_radioButton.isChecked() and len(self.mark.data) > 0:
+                    self.update_tail_segment_thresh(self.threshTail_slider.value())
+
+        except Exception as exc:
+            print("update_tail_arc_enabled_states error:", exc)
+
     def get_tail_arc_roi_params(self):
-        # Compatibilité avec l'ancien tracking : retourne R uniquement.
-        if hasattr(self, "tailArcROI_R") and self.tailArcROI_R.initialized:
+        # Compatibilité avec l'ancien tracking : retourne R uniquement si R est actif.
+        if self.is_tail_arc_enabled("R") and hasattr(self, "tailArcROI_R") and self.tailArcROI_R.initialized:
             return self.tailArcROI_R.get_parameters()
         return None
 
     def get_tail_arc_roi_params_all(self):
         params = {}
 
+        # Important : on retourne un dictionnaire, même vide.
+        # Ainsi, si aucun arc n'est coché, le tracking ne retombe pas sur
+        # l'ancien tracking rectangulaire de queue.
         for label, roi in self.get_tail_arc_rois().items():
+            if not self.is_tail_arc_enabled(label):
+                continue
+
             if roi.initialized:
                 params[label] = roi.get_parameters()
 
-        return params if len(params) > 0 else None
+        return params
 
     def get_tail_arc_rois(self):
         if hasattr(self, "tailArcROIs"):
@@ -1989,6 +2315,9 @@ class UIXenopus(QtWidgets.QMainWindow):
             if line_item is None or point_item is None:
                 return
 
+            if tail_pos is not None and not self.is_tail_arc_enabled(label):
+                tail_pos = None
+
             if tail_pos is None or len(tail_pos) < 2:
                 line_item.setData([], [])
                 point_item.setData([], [])
@@ -2017,8 +2346,7 @@ class UIXenopus(QtWidgets.QMainWindow):
             self.set_tail_arc_tracking_marker(label, None)
 
     def _selected_tail_arc_labels(self):
-        # Conservé pour compatibilité, mais les sliders curve sont maintenant séparés.
-        return ["R", "M", "C"]
+        return [label for label in ["R", "M", "C"] if self.is_tail_arc_enabled(label)]
 
     def _initialize_tail_arcs_if_needed(self):
         if len(self.mark.data) == 0:
@@ -2032,7 +2360,900 @@ class UIXenopus(QtWidgets.QMainWindow):
             if not roi.initialized:
                 roi.initialize_from_points(tailRoot, nose, tail)
 
+        self.update_tail_arc_enabled_states(update_preview=False)
         return True
+
+    def get_current_analysis_frame(self):
+        """
+        Retourne la frame à utiliser pour les prévisualisations.
+
+        En mode vidéo importée, on utilise la première frame de la vidéo.
+        En mode live, on utilise la frame courante affichée par la caméra.
+        """
+        try:
+            if getattr(self, "imported_video_frame", None) is not None:
+                if getattr(self, "analysis_mode", "live") == "video":
+                    return self.imported_video_frame
+        except Exception:
+            pass
+
+        try:
+            updater = getattr(self.video_capture_widget, "videoDisplayer_updater", None)
+
+            if updater is not None:
+                frame = getattr(updater, "current_frame_to_display", None)
+
+                if frame is not None:
+                    return frame
+        except Exception:
+            pass
+
+        return getattr(self, "imported_video_frame", None)
+
+    def show_gray_frame_in_image_dock(self, gray_frame):
+        """
+        Affiche une frame grayscale directement dans le plot image existant.
+
+        On évite show_frame_in_pyqtgraph() ici pour ne pas dépendre du LUT live/caméra.
+        """
+        try:
+            self.video.currentGrayFrame = gray_frame.copy()
+            self.video.currentFrame = gray_frame.copy()
+            self.video.currentTFrame = cv2.transpose(gray_frame[::-1, :])
+            self.videoDisplay_Widget.img.setImage(
+                self.video.currentTFrame,
+                autoLevels=False
+            )
+        except Exception as exc:
+            print("show_gray_frame_in_image_dock error:", exc)
+
+    def _remember_live_dock_heights(self):
+        """
+        Sauvegarde les hauteurs actuelles des docks live pour pouvoir revenir proprement.
+        """
+        if getattr(self, "_live_dock_height_cache", None):
+            return
+
+        for name, dock in [("d1", self.d1), ("d9", self.d9), ("d11", self.d11)]:
+            try:
+                self._live_dock_height_cache[name] = {
+                    "min": dock.minimumHeight(),
+                    "max": dock.maximumHeight(),
+                    "height": dock.height(),
+                }
+            except Exception:
+                pass
+
+    def _force_dock_height(self, dock, height):
+        """
+        Force une hauteur provisoire pour un dock.
+        """
+        try:
+            dock.setMinimumHeight(int(height))
+            dock.setMaximumHeight(int(height))
+        except Exception:
+            pass
+
+    def _release_dock_height(self, dock):
+        """
+        Redonne au dock une hauteur libre.
+        """
+        try:
+            dock.setMinimumHeight(0)
+            dock.setMaximumHeight(16777215)
+        except Exception:
+            pass
+
+    def _apply_imported_video_layout(self):
+        """
+        En mode Imported video, on remplit le vide en agrandissant la zone Image.
+        """
+        self._remember_live_dock_heights()
+
+        # Camera/player compressés : ils n'ont pas besoin d'occuper de hauteur.
+        try:
+            self._force_dock_height(self.d9, 0)
+            self._force_dock_height(self.d11, 0)
+            self._force_dock_height(self.d15, 205)
+        except Exception:
+            pass
+
+        # Zone image plus haute, mais on garde une petite bande utile pour la progression.
+        try:
+            self._force_dock_height(self.d1, self._video_mode_image_height)
+        except Exception:
+            pass
+
+        try:
+            self.area.resizeDocks(
+                [self.d1, self.d15, self.d9, self.d11],
+                [self._video_mode_image_height, 205, 1, 1],
+                "vertical"
+            )
+        except Exception:
+            pass
+
+        try:
+            self.videoDisplay_Widget.plotView.setAspectLocked(True)
+            self.videoDisplay_Widget.plotView.autoRange()
+        except Exception:
+            pass
+
+    def _restore_live_layout(self):
+        """
+        Restaure un layout normal en mode Real-time camera.
+        """
+        try:
+            self._release_dock_height(self.d1)
+            self._release_dock_height(self.d9)
+            self._release_dock_height(self.d11)
+            self._release_dock_height(self.d15)
+        except Exception:
+            pass
+
+        try:
+            self.area.resizeDocks(
+                [self.d1, self.d9, self.d11, self.d15],
+                [360, 210, 210, 1],
+                "vertical"
+            )
+        except Exception:
+            pass
+
+
+    def on_analysis_mode_changed(self, index):
+        """
+        Appelé par les onglets globaux du haut.
+        0 = temps réel/caméra
+        1 = vidéo importée
+        """
+        if index == 1:
+            self.set_analysis_mode("video", update_combo=False)
+        else:
+            self.set_analysis_mode("live", update_combo=False)
+
+    def _is_live_tracking_running(self):
+        try:
+            if self.track_checkBox.isChecked():
+                return True
+        except Exception:
+            pass
+
+        try:
+            if self.controller is not None:
+                if self.controller.pipeline is not None and self.controller.pipeline.running:
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    def _is_video_file_analysis_running(self):
+        try:
+            if self.controller is None:
+                return False
+
+            status = self.controller.get_video_file_analysis_status()
+            return bool(status.get("running", False))
+
+        except Exception:
+            return False
+
+    def _set_dock_clean_visible(self, dock, visible):
+        """
+        Affiche ou masque un Dock pyqtgraph en limitant les espaces vides.
+
+        hide() seul peut laisser un grand espace ou une barre de titre selon
+        l'organisation des docks. On combine donc hide/show + hauteur max.
+        """
+        try:
+            if visible:
+                dock.setMaximumHeight(16777215)
+                dock.setMinimumHeight(0)
+                dock.show()
+            else:
+                dock.hide()
+                dock.setMinimumHeight(0)
+                dock.setMaximumHeight(0)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(dock, "label"):
+                dock.label.setVisible(visible)
+        except Exception:
+            pass
+
+    def set_analysis_mode(self, mode, update_combo=True):
+        """
+        Active un seul mode d'analyse à la fois.
+
+        live  : caméra + video capture/player.
+        video : vidéo importée, sans capture caméra ni video player.
+
+        Les contrôles de l'autre mode sont vraiment masqués pour éviter
+        l'interface vide et les conflits inutiles.
+        """
+        if mode not in ("live", "video"):
+            mode = "live"
+
+        # Protection : pas de bascule pendant une analyse en cours.
+        if mode == "video" and self._is_live_tracking_running():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Analysis mode",
+                "Stop real-time tracking before switching to imported video mode."
+            )
+            self._sync_analysis_mode_combo("live")
+            return
+
+        if mode == "live" and self._is_video_file_analysis_running():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Analysis mode",
+                "Stop imported video analysis before switching to real-time mode."
+            )
+            self._sync_analysis_mode_combo("video")
+            return
+
+        self.analysis_mode = mode
+        self._sync_analysis_mode_combo(mode)
+
+        if mode == "video":
+            # Mode vidéo importée :
+            # - barre vidéo visible ;
+            # - docks caméra/player masqués et compressés ;
+            # - on garde Image + ROI + segmentation + optokinetic + plots.
+            try:
+                self.importedVideo_toolbar.hide()
+            except Exception:
+                pass
+
+            self._set_dock_clean_visible(self.d9, False)
+            self._set_dock_clean_visible(self.d11, False)
+            self._set_dock_clean_visible(self.d15, True)
+
+            try:
+                self.d1.raiseDock()
+            except Exception:
+                pass
+
+            try:
+                self.d8.raiseDock()
+            except Exception:
+                pass
+
+            try:
+                self.track_checkBox.setEnabled(False)
+            except Exception:
+                pass
+
+            # Remplir le vide laissé par les docks caméra/player.
+            self._apply_imported_video_layout()
+
+            try:
+                self.startImportedVideo_btn.setEnabled(True)
+            except Exception:
+                pass
+
+            try:
+                if self.imported_video_path is None:
+                    self.importedVideoStatus_label.setText(
+                        "Open a video, place ROIs/arcs, then analyze."
+                    )
+            except Exception:
+                pass
+
+        else:
+            # Mode temps réel :
+            # - barre vidéo importée masquée ;
+            # - docks caméra/player visibles ;
+            # - aucun accès visuel au mode importé.
+            try:
+                self.importedVideo_toolbar.hide()
+            except Exception:
+                pass
+
+            self._restore_live_layout()
+
+            self._set_dock_clean_visible(self.d15, False)
+            self._set_dock_clean_visible(self.d9, True)
+            self._set_dock_clean_visible(self.d11, True)
+
+            try:
+                self.d11.raiseDock()
+            except Exception:
+                pass
+
+            try:
+                self.d8.raiseDock()
+            except Exception:
+                pass
+
+            try:
+                self.track_checkBox.setEnabled(True)
+            except Exception:
+                pass
+
+    def _sync_analysis_mode_combo(self, mode):
+        try:
+            self.analysisMode_tabs.blockSignals(True)
+            self.analysisMode_tabs.setCurrentIndex(1 if mode == "video" else 0)
+            self.analysisMode_tabs.blockSignals(False)
+        except Exception:
+            pass
+
+    def show_video_file_interface(self):
+        """
+        Compatibilité avec les appels existants.
+        Passe simplement en mode Imported video.
+        """
+        self.set_analysis_mode("video", update_combo=True)
+
+    def show_direct_interface(self):
+        """
+        Compatibilité avec les appels existants.
+        Passe simplement en mode Real-time camera.
+        """
+        self.set_analysis_mode("live", update_combo=True)
+
+    def choose_imported_video_file(self):
+        video_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Open video file",
+            os.path.expanduser("~"),
+            "Video files (*.avi *.mp4 *.mov *.mkv *.mpg *.mpeg);;All files (*.*)"
+        )
+
+        if not video_path:
+            return
+
+        self.imported_video_path = video_path
+        self.importedVideoPath_label.setText(video_path)
+        self.importedVideoStatus_label.setText("Video selected.")
+        self.show_video_file_interface()
+
+        self.load_imported_video_first_frame(video_path)
+
+    def load_imported_video_first_frame(self, video_path, keep_crop_values=False):
+        try:
+            cap = cv2.VideoCapture(video_path)
+
+            if not cap.isOpened():
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Video file",
+                    "Impossible d'ouvrir la vidéo."
+                )
+                return False
+
+            ok, frame = cap.read()
+
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+            cap.release()
+
+            if not ok or frame is None:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Video file",
+                    "Impossible de lire la première frame."
+                )
+                return False
+
+            if len(frame.shape) > 2:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame
+
+            if not keep_crop_values:
+                self.configure_imported_video_crop_controls(width, height)
+
+            cropped_gray = self.crop_imported_video_frame(gray)
+            self.imported_video_frame = cropped_gray.copy()
+
+            self.video.path = video_path
+            self.video.width = cropped_gray.shape[1]
+            self.video.height = cropped_gray.shape[0]
+            self.video.fps = fps
+            self.video.nbFrames = total_frames
+
+            self.show_gray_frame_in_image_dock(cropped_gray)
+
+            try:
+                self._apply_imported_video_layout()
+            except Exception:
+                pass
+
+            try:
+                updater = getattr(self.video_capture_widget, "videoDisplayer_updater", None)
+
+                if updater is not None:
+                    updater.current_frame_to_display = gray.copy()
+            except Exception:
+                pass
+
+            self.importedVideoStatus_label.setText(
+                "Loaded: {} frames | {:.2f} fps | full {} x {} | shown {} x {}".format(
+                    total_frames,
+                    fps,
+                    width,
+                    height,
+                    self.video.width,
+                    self.video.height
+                )
+            )
+
+            self.imported_video_total_frames = total_frames
+            self.set_imported_review_limits(total_frames)
+
+            return True
+
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Video file",
+                "Erreur chargement vidéo : {}".format(exc)
+            )
+            return False
+
+    def get_imported_video_crop_config(self):
+        """
+        Retourne le crop vidéo importée en coordonnées OpenCV :
+        x, y, width, height.
+
+        Si le crop est désactivé, retourne None.
+        """
+        try:
+            if not self.videoCropEnable_ckb.isChecked():
+                return None
+
+            raw_w = int(getattr(self, "imported_video_raw_width", 0) or 0)
+            raw_h = int(getattr(self, "imported_video_raw_height", 0) or 0)
+
+            if raw_w <= 0 or raw_h <= 0:
+                return None
+
+            x = int(self.videoCropOffsetX_slider.value())
+            y = int(self.videoCropOffsetY_slider.value())
+            w = int(self.videoCropFrameWidth_slider.value())
+            h = int(self.videoCropFrameHeight_slider.value())
+
+            x = max(0, min(x, raw_w - 1))
+            y = max(0, min(y, raw_h - 1))
+            w = max(1, min(w, raw_w - x))
+            h = max(1, min(h, raw_h - y))
+
+            return {
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+            }
+
+        except Exception:
+            return None
+
+    def crop_imported_video_frame(self, gray_frame):
+        """
+        Applique le crop actuel à une frame grayscale.
+        """
+        if gray_frame is None:
+            return gray_frame
+
+        crop = self.get_imported_video_crop_config()
+
+        if not crop:
+            return gray_frame
+
+        try:
+            x = int(crop["x"])
+            y = int(crop["y"])
+            w = int(crop["width"])
+            h = int(crop["height"])
+            return gray_frame[y:y + h, x:x + w]
+        except Exception:
+            return gray_frame
+
+    def update_imported_video_crop_labels(self):
+        """
+        Met à jour les valeurs affichées des sliders de crop.
+        Les labels remplacent les anciens champs x/y/w/h.
+        """
+        try:
+            raw_w = int(getattr(self, "imported_video_raw_width", 0) or 0)
+            raw_h = int(getattr(self, "imported_video_raw_height", 0) or 0)
+
+            x = int(self.videoCropOffsetX_slider.value())
+            y = int(self.videoCropOffsetY_slider.value())
+
+            if raw_w > 0:
+                self.videoCropFrameWidth_slider.setMaximum(max(1, raw_w - x))
+            if raw_h > 0:
+                self.videoCropFrameHeight_slider.setMaximum(max(1, raw_h - y))
+
+            self.videoCropFrameWidth_value.setText(str(int(self.videoCropFrameWidth_slider.value())))
+            self.videoCropFrameHeight_value.setText(str(int(self.videoCropFrameHeight_slider.value())))
+            self.videoCropOffsetX_value.setText(str(x))
+            self.videoCropOffsetY_value.setText(str(y))
+
+        except Exception:
+            pass
+
+    def configure_imported_video_crop_controls(self, width, height):
+        """
+        Initialise les contrôles de crop après ouverture d'une vidéo.
+        """
+        try:
+            width = int(width or 0)
+            height = int(height or 0)
+        except Exception:
+            width = 0
+            height = 0
+
+        self.imported_video_raw_width = width
+        self.imported_video_raw_height = height
+
+        max_x = max(0, width - 1)
+        max_y = max(0, height - 1)
+
+        self.videoCropOffsetX_slider.setMaximum(max_x)
+        self.videoCropOffsetY_slider.setMaximum(max_y)
+        self.videoCropFrameWidth_slider.setMaximum(max(1, width))
+        self.videoCropFrameHeight_slider.setMaximum(max(1, height))
+
+        self.videoCropOffsetX_slider.setValue(0)
+        self.videoCropOffsetY_slider.setValue(0)
+        self.videoCropFrameWidth_slider.setValue(max(1, width))
+        self.videoCropFrameHeight_slider.setValue(max(1, height))
+        self.update_imported_video_crop_labels()
+
+    def apply_imported_video_crop(self):
+        """
+        Applique le crop à l'affichage courant.
+        Les ROIs/arcs doivent être placés sur cette image croppée.
+        """
+        if self.imported_video_path is None:
+            return
+
+        try:
+            self.load_imported_video_first_frame(self.imported_video_path, keep_crop_values=True)
+            self.importedVideoStatus_label.setText(
+                "Crop applied: offset x={} offset y={} frame width={} frame height={}".format(
+                    self.videoCropOffsetX_slider.value(),
+                    self.videoCropOffsetY_slider.value(),
+                    self.videoCropFrameWidth_slider.value(),
+                    self.videoCropFrameHeight_slider.value()
+                )
+            )
+        except Exception as exc:
+            print("apply_imported_video_crop error:", exc)
+
+    def reset_imported_video_crop(self):
+        """
+        Remet le crop sur toute la vidéo.
+        """
+        if self.imported_video_raw_width > 0 and self.imported_video_raw_height > 0:
+            self.videoCropOffsetX_slider.setValue(0)
+            self.videoCropOffsetY_slider.setValue(0)
+            self.videoCropFrameWidth_slider.setValue(self.imported_video_raw_width)
+            self.videoCropFrameHeight_slider.setValue(self.imported_video_raw_height)
+            self.update_imported_video_crop_labels()
+
+        if self.imported_video_path is not None:
+            self.load_imported_video_first_frame(self.imported_video_path, keep_crop_values=True)
+
+
+    def set_imported_review_limits(self, total_frames):
+        """
+        Configure le slider et le spinbox de navigation vidéo.
+        """
+        try:
+            total_frames = int(total_frames or 0)
+        except Exception:
+            total_frames = 0
+
+        self.imported_video_total_frames = total_frames
+        max_frame = max(0, total_frames - 1)
+
+        self.imported_review_ignore_signals = True
+        try:
+            self.reviewFrameSlider.setRange(0, max_frame)
+            self.reviewFrameSpin.setRange(0, max_frame)
+            self.reviewFrameSlider.setValue(0)
+            self.reviewFrameSpin.setValue(0)
+
+            enabled = total_frames > 0
+            self.reviewFrameSlider.setEnabled(enabled)
+            self.reviewFrameSpin.setEnabled(enabled)
+            self.reviewFramePrev_btn.setEnabled(enabled)
+            self.reviewFrameNext_btn.setEnabled(enabled)
+        finally:
+            self.imported_review_ignore_signals = False
+
+    def on_review_frame_slider_changed(self, value):
+        if getattr(self, "imported_review_ignore_signals", False):
+            return
+
+        self.show_imported_video_review_frame(int(value), update_controls=False)
+
+    def on_review_frame_spin_changed(self, value):
+        if getattr(self, "imported_review_ignore_signals", False):
+            return
+
+        self.show_imported_video_review_frame(int(value), update_controls=False)
+
+    def review_imported_video_previous_frame(self):
+        try:
+            frame_id = max(0, int(self.reviewFrameSpin.value()) - 1)
+            self.show_imported_video_review_frame(frame_id)
+        except Exception:
+            pass
+
+    def review_imported_video_next_frame(self):
+        try:
+            max_frame = max(0, int(self.reviewFrameSlider.maximum()))
+            frame_id = min(max_frame, int(self.reviewFrameSpin.value()) + 1)
+            self.show_imported_video_review_frame(frame_id)
+        except Exception:
+            pass
+
+    def show_imported_video_review_frame(self, frame_id, update_controls=True):
+        """
+        Affiche une frame de la vidéo importée et applique les overlays de tracking
+        si cette frame a déjà été analysée.
+
+        Permet de naviguer frame par frame après l'analyse.
+        """
+        if self.imported_video_path is None:
+            return
+
+        try:
+            frame_id = int(frame_id)
+        except Exception:
+            frame_id = 0
+
+        max_frame = max(0, int(getattr(self, "imported_video_total_frames", 0) or 0) - 1)
+        frame_id = max(0, min(max_frame, frame_id))
+
+        try:
+            cap = cv2.VideoCapture(self.imported_video_path)
+
+            if not cap.isOpened():
+                return
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+            ok, frame = cap.read()
+            cap.release()
+
+            if not ok or frame is None:
+                return
+
+            if len(frame.shape) > 2:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame
+
+            cropped_gray = self.crop_imported_video_frame(gray)
+
+            self.imported_video_frame = cropped_gray.copy()
+            self.show_gray_frame_in_image_dock(cropped_gray)
+
+            if update_controls:
+                self.imported_review_ignore_signals = True
+                try:
+                    self.reviewFrameSlider.setValue(frame_id)
+                    self.reviewFrameSpin.setValue(frame_id)
+                finally:
+                    self.imported_review_ignore_signals = False
+            else:
+                self.imported_review_ignore_signals = True
+                try:
+                    self.reviewFrameSlider.setValue(frame_id)
+                    self.reviewFrameSpin.setValue(frame_id)
+                finally:
+                    self.imported_review_ignore_signals = False
+
+            result = None
+
+            try:
+                if self.controller is not None:
+                    result = self.controller.get_video_file_result(frame_id)
+            except Exception:
+                result = None
+
+            if result is not None:
+                try:
+                    self.controller.apply_result_overlay(result, move_eye_roi=False)
+                    self.importedVideoStatus_label.setText(
+                        "Review frame {} / {} — tracking overlay displayed".format(
+                            frame_id,
+                            max_frame
+                        )
+                    )
+                except Exception as exc:
+                    print("review overlay error:", exc)
+            else:
+                self.importedVideoStatus_label.setText(
+                    "Review frame {} / {} — no tracking result yet".format(
+                        frame_id,
+                        max_frame
+                    )
+                )
+
+        except Exception as exc:
+            print("show_imported_video_review_frame error:", exc)
+
+    def maybe_auto_preview_imported_video_frame(self, frame_id):
+        """
+        Pendant l'analyse, affiche périodiquement la frame en cours avec overlays.
+        On ne le fait pas à chaque frame pour ne pas ralentir l'analyse.
+        """
+        if not self.previewDuringAnalysis_ckb.isChecked():
+            return
+
+        try:
+            frame_id = int(frame_id)
+        except Exception:
+            return
+
+        if frame_id < 0:
+            return
+
+        if self.imported_review_last_auto_frame >= 0:
+            if frame_id - self.imported_review_last_auto_frame < 25:
+                return
+
+        self.imported_review_last_auto_frame = frame_id
+        self.show_imported_video_review_frame(frame_id)
+
+
+    def start_imported_video_analysis(self):
+        if getattr(self, "analysis_mode", "live") != "video":
+            self.set_analysis_mode("video", update_combo=True)
+
+            if getattr(self, "analysis_mode", "live") != "video":
+                return
+
+        if self.controller is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Controller",
+                "AppController is not initialized."
+            )
+            return
+
+        if self.imported_video_path is None:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Video file",
+                "Choose a video file before starting analysis."
+            )
+            return
+
+        ok = self.check_analysis_parameters()
+
+        if not ok:
+            return
+
+        if not self.validate_result_settings():
+            return
+
+        self.reset_Plot()
+        self.reset_Buffer()
+        self.clear_tail_arc_tracking_markers()
+
+        try:
+            self.controller.start_video_file_analysis(
+                self.imported_video_path,
+                video_crop=self.get_imported_video_crop_config()
+            )
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Video analysis",
+                str(exc)
+            )
+            return
+
+        self.importedVideoProgress.setValue(0)
+        self.imported_review_last_auto_frame = -1
+        self.importedVideoStatus_label.setText("Imported video analysis running...")
+        self.startImportedVideo_btn.setEnabled(False)
+        self.stopImportedVideo_btn.setEnabled(True)
+        self.track_checkBox.setEnabled(False)
+        self.video_file_status_timer.start()
+        self.show_video_file_interface()
+
+    def stop_imported_video_analysis(self):
+        try:
+            if self.controller is not None:
+                self.controller.stop_video_file_analysis()
+        except Exception:
+            pass
+
+        self.importedVideoStatus_label.setText("Stopping imported video analysis...")
+
+    def update_imported_video_status(self):
+        if self.controller is None:
+            return
+
+        status = self.controller.get_video_file_analysis_status()
+
+        progress = int(round(float(status.get("progress", 0.0))))
+        progress = max(0, min(100, progress))
+        self.importedVideoProgress.setValue(progress)
+
+        frame_id = int(status.get("frame_id", 0) or 0)
+        total_frames = int(status.get("total_frames", 0) or 0)
+        rows_written = int(status.get("rows_written", 0) or 0)
+
+        if status.get("running", False):
+            self.importedVideoStatus_label.setText(
+                "Running: frame {} / {} | CSV rows {}".format(
+                    frame_id,
+                    total_frames,
+                    rows_written
+                )
+            )
+
+            preview_frame_id = int(status.get("preview_frame_id", frame_id - 1) or 0)
+            self.maybe_auto_preview_imported_video_frame(preview_frame_id)
+            return
+
+        if status.get("error", ""):
+            self.video_file_status_timer.stop()
+            self.startImportedVideo_btn.setEnabled(True)
+            self.stopImportedVideo_btn.setEnabled(False)
+            self.track_checkBox.setEnabled(True)
+            self.importedVideoStatus_label.setText(
+                "Error: {}".format(status.get("error", ""))
+            )
+            return
+
+        if status.get("done", False):
+            self.video_file_status_timer.stop()
+            self.importedVideoProgress.setValue(100)
+            self.startImportedVideo_btn.setEnabled(True)
+            self.stopImportedVideo_btn.setEnabled(False)
+            self.track_checkBox.setEnabled(True)
+            self.importedVideoStatus_label.setText(
+                "Done: {} frames analyzed | CSV rows {}".format(
+                    frame_id,
+                    rows_written
+                )
+            )
+            self.updatePlot_Full()
+            self.update_next_csv_preview()
+
+            # Afficher automatiquement la dernière frame analysée avec ses points.
+            if frame_id > 0:
+                self.show_imported_video_review_frame(frame_id - 1)
+
+            return
+
+        if status.get("stopped", False):
+            self.video_file_status_timer.stop()
+            self.startImportedVideo_btn.setEnabled(True)
+            self.stopImportedVideo_btn.setEnabled(False)
+            self.track_checkBox.setEnabled(True)
+            self.importedVideoStatus_label.setText(
+                "Stopped: {} frames analyzed | CSV rows {}".format(
+                    frame_id,
+                    rows_written
+                )
+            )
+            self.updatePlot_Full()
+            self.update_next_csv_preview()
+
+            if frame_id > 0:
+                self.show_imported_video_review_frame(frame_id - 1)
+
+            return
+
 
     def choose_result_folder(self):
         folder = QtWidgets.QFileDialog.getExistingDirectory(
@@ -2185,6 +3406,15 @@ class UIXenopus(QtWidgets.QMainWindow):
             return
 
         if self.track_checkBox.isChecked():
+            if getattr(self, "analysis_mode", "live") != "live":
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Analysis mode",
+                    "Switch to Real-time camera mode before starting live tracking."
+                )
+                self.track_checkBox.setChecked(False)
+                return
+
             ok = self.check_analysis_parameters()
 
             if not ok:
@@ -2282,7 +3512,7 @@ class UIXenopus(QtWidgets.QMainWindow):
 
     def update_eyes_overlay(self,value,roiIndex):
 
-        frame=self.video_capture_widget.videoDisplayer_updater.current_frame_to_display
+        frame=self.get_current_analysis_frame()
 
         if not self.track_checkBox.isChecked() and len(self.mark.data)>0:
             if len(self.roisEye)>0 :
@@ -2338,6 +3568,9 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.update_tail_arc_curve_R(value)
 
     def _update_tail_arc_curve_for_label(self, label, value):
+        if not self.is_tail_arc_enabled(label):
+            return
+
         roi = self.get_tail_arc_rois().get(label)
 
         if roi is not None and roi.initialized:
@@ -2361,7 +3594,7 @@ class UIXenopus(QtWidgets.QMainWindow):
             if len(self.mark.data) == 0:
                 return
 
-            frame = self.video_capture_widget.videoDisplayer_updater.current_frame_to_display
+            frame = self.get_current_analysis_frame()
 
             if frame is None:
                 return
@@ -2376,6 +3609,10 @@ class UIXenopus(QtWidgets.QMainWindow):
             # et sa propre droite root -> point.
             for label in ["R", "M", "C"]:
                 roi = self.get_tail_arc_rois().get(label)
+
+                if not self.is_tail_arc_enabled(label):
+                    self.set_tail_arc_tracking_marker(label, None)
+                    continue
 
                 if roi is None or not roi.initialized:
                     self.set_tail_arc_tracking_marker(label, None)
@@ -2429,7 +3666,9 @@ class UIXenopus(QtWidgets.QMainWindow):
                     if roi.initialized:
                         roi.update_graph()
 
-                frame = self.video_capture_widget.videoDisplayer_updater.current_frame_to_display
+                self.update_tail_arc_enabled_states(update_preview=False)
+
+                frame = self.get_current_analysis_frame()
 
                 if frame is not None:
                     self.update_tail_segment_thresh(self.threshTail_slider.value())
@@ -2589,6 +3828,11 @@ class UIXenopus(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.No
         )
         if reply == QtWidgets.QMessageBox.Yes:
+            try:
+                if self.controller is not None:
+                    self.controller.stop_video_file_analysis()
+            except Exception:
+                pass
             self.close_camera()
             event.accept()
         else:
