@@ -339,10 +339,15 @@ class UIVideoCapture(pg.LayoutWidget):
         splitter_connect.addWidget(self.connectCam_btn)
         splitter_connect.addWidget(self.videoName_label)        
          
-        saveConfig_btn = QtWidgets.QPushButton('Save config')
-        saveConfig_btn.clicked.connect(self.save_config)
-        loadConfig_btn = QtWidgets.QPushButton('Load config')
-        loadConfig_btn.clicked.connect(self.load_config)
+        # Ancien système de configuration caméra masqué.
+        # Les paramètres sont maintenant gérés par Save settings / Load settings
+        # dans le panneau Real-time camera.
+        self.saveConfig_btn = QtWidgets.QPushButton('Save config')
+        self.saveConfig_btn.clicked.connect(self.save_config)
+        self.saveConfig_btn.hide()
+        self.loadConfig_btn = QtWidgets.QPushButton('Load config')
+        self.loadConfig_btn.clicked.connect(self.load_config)
+        self.loadConfig_btn.hide()
         
         
         #affichage de la video acquise par la camera live : équivalent bouton play du player
@@ -659,8 +664,7 @@ class UIVideoCapture(pg.LayoutWidget):
         self.addWidget(splitter_connect,row=0,col=0)
         # self.addWidget(self.connectCam_btn,row=0,col=0)
         # self.addWidget(self.videoName_label,row=0,col=1)
-        self.addWidget(loadConfig_btn, row=0, col=6)
-        self.addWidget(saveConfig_btn, row=0, col=7)
+        # Ancien Load config / Save config retiré de l'interface.
         self.addWidget(splitter_live,row=2,col=0)
         self.addWidget(self.trigger_checkBox, row=3,col=0)
         # self.addWidget(self.lenBuffer_label,row=4,col=0)

@@ -82,7 +82,7 @@ import time
 import sys
 import json
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot, QRectF
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets
 
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui as QtgGui
@@ -1082,7 +1082,9 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.display_updater=None
         self.videoDisplay_Widget=define_rois.UIVideoDisplayRoi(self.video)
         self.videoDisplay_Widget.proxy1 = pg.SignalProxy(self.videoDisplay_Widget.plotView.scene().sigMouseClicked, rateLimit=60, slot=self.mouse_clicked)
-        self.videoPlayer_Widget=video_player.UIVideoPlayer(self.videoDisplay_Widget,self.video,tracking)
+        # Ancien Video player supprimé de l'interface.
+        # L'analyse Imported video utilise son propre lecteur/review frame par frame.
+        self.videoPlayer_Widget = None
 
         self.video_capture_widget=video_capture.UIVideoCapture(self.videoDisplay_Widget,self.video,self.display_updater)
 
@@ -1166,6 +1168,11 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.analysisMode_toolbar.addWidget(self.analysisMode_label)
         self.analysisMode_toolbar.addWidget(self.analysisMode_tabs)
 
+        # Les boutons Save/Load settings ne sont pas dans la toolbar globale.
+        # Ils sont placés dans le panneau du mode actif :
+        # - Real-time camera : dock video Capture ;
+        # - Imported video : dock Imported video progress.
+
         # Barre dédiée au mode vidéo importée.
         # Elle est masquée en mode temps réel, donc l'interface ne montre pas les deux modes en même temps.
         self.importedVideo_toolbar = self.addToolBar("Imported video tools")
@@ -1191,12 +1198,13 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.d6 = Dock("Eye 1-Y", size=(500,200))
         self.d7 = Dock("Eye 2-Y", size=(500,200))
         self.d8 = Dock("Regions of interest", size=(500,200))
-        self.d9 = Dock("Video player", size=(500,200))
+        # Dock Video player supprimé : il fusionnait parfois avec video Capture après Load settings.
+        self.d9 = None
         self.d10 = Dock("Segmentation settings", size=(500,200))
         self.d11 = Dock("video Capture ",size=(500,200))
         self.d13 = Dock("Optokinetic", size=(500,200))
         self.d14 = Dock("Video file analysis", size=(500,200))
-        self.d15 = Dock("Imported video progress", size=(1000,235))
+        self.d15 = Dock("Imported video progress", size=(1000,232))
 
         self.area.addDock(self.d1, 'left')
         self.area.addDock(self.d2, 'bottom', self.d1)
@@ -1208,7 +1216,6 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.area.addDock(self.d15, 'bottom', self.d1)
         self.area.addDock(self.d11, 'bottom', self.d15)
-        self.area.addDock(self.d9, 'above', self.d11)
         self.area.addDock(self.d10, 'above', self.d2)
         self.area.addDock(self.d8, 'above', self.d10)
         self.area.addDock(self.d13, 'above', self.d2)
@@ -1591,6 +1598,20 @@ class UIXenopus(QtWidgets.QMainWindow):
         resetBuffer_btn.clicked.connect(self.reset_Buffer)
         resetBuffer_btn.setMinimumHeight(28)
 
+        self.saveAnalysisSettings_btn = QtWidgets.QPushButton("Save settings")
+        self.saveAnalysisSettings_btn.setToolTip(
+            "Save all current settings for Real-time camera or Imported video."
+        )
+        self.saveAnalysisSettings_btn.clicked.connect(self.save_analysis_settings)
+        self.saveAnalysisSettings_btn.setMinimumHeight(28)
+
+        self.loadAnalysisSettings_btn = QtWidgets.QPushButton("Load settings")
+        self.loadAnalysisSettings_btn.setToolTip(
+            "Reload settings previously saved as JSON."
+        )
+        self.loadAnalysisSettings_btn.clicked.connect(self.load_analysis_settings)
+        self.loadAnalysisSettings_btn.setMinimumHeight(28)
+
         self.outputFolder_btn = QtWidgets.QPushButton("Output folder")
         self.outputFolder_btn.clicked.connect(self.choose_result_folder)
 
@@ -1821,8 +1842,18 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.d11.addWidget(self.video_capture_widget)
 
+        # Boutons settings du mode Real-time camera.
+        # On les place dans le dock video Capture, pas dans la toolbar globale,
+        # pour garder la même logique que le panneau Imported video.
+        try:
+            self.saveAnalysisSettings_btn.setMaximumWidth(140)
+            self.loadAnalysisSettings_btn.setMaximumWidth(140)
+            self.video_capture_widget.addWidget(self.saveAnalysisSettings_btn, row=1, col=6)
+            self.video_capture_widget.addWidget(self.loadAnalysisSettings_btn, row=1, col=7)
+        except Exception as exc:
+            print("Could not add real-time settings buttons:", exc)
+
         self.optokinetic_Widget=optok.UIOptostim()
-        self.d9.addWidget(self.videoPlayer_Widget)
         self.d13.addWidget(self.optokinetic_Widget)
 
         # ------------------------------------------------------------------
@@ -1853,19 +1884,6 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.stopImportedVideo_btn.clicked.connect(self.stop_imported_video_analysis)
         self.stopImportedVideo_btn.setEnabled(False)
         self.stopImportedVideo_btn.setMinimumHeight(28)
-
-        # Réglages vidéo importée : sauvegarde/restauration d'une configuration complète.
-        self.saveImportedSettings_btn = QtWidgets.QPushButton("Save settings")
-        self.saveImportedSettings_btn.setToolTip(
-            "Save imported-video settings: crop, ROIs, R/M/C arcs, thresholds, curves, output and camera UI values."
-        )
-        self.saveImportedSettings_btn.clicked.connect(self.save_imported_video_settings)
-
-        self.loadImportedSettings_btn = QtWidgets.QPushButton("Load settings")
-        self.loadImportedSettings_btn.setToolTip(
-            "Load a previously saved imported-video settings file."
-        )
-        self.loadImportedSettings_btn.clicked.connect(self.load_imported_video_settings)
 
         self.importedVideoProgress = QtWidgets.QProgressBar()
         self.importedVideoProgress.setRange(0, 100)
@@ -1947,6 +1965,18 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.videoCropReset_btn.setMaximumWidth(95)
         self.videoCropReset_btn.clicked.connect(self.reset_imported_video_crop)
 
+        self.saveImportedSettings_btn = QtWidgets.QPushButton("Save settings")
+        self.saveImportedSettings_btn.setToolTip(
+            "Save the current imported-video/live settings in JSON."
+        )
+        self.saveImportedSettings_btn.clicked.connect(self.save_analysis_settings)
+
+        self.loadImportedSettings_btn = QtWidgets.QPushButton("Load settings")
+        self.loadImportedSettings_btn.setToolTip(
+            "Load a JSON settings file and restore ROIs/arcs/thresholds/camera UI."
+        )
+        self.loadImportedSettings_btn.clicked.connect(self.load_analysis_settings)
+
         self.videoFileNote_label = QtWidgets.QLabel(
             "This tab does not use the camera capture dock or the video player dock. "
             "It reuses the same tracking code as live mode, including R/M/C arcs, thresholds, curves, and CSV output."
@@ -2015,10 +2045,9 @@ class UIXenopus(QtWidgets.QMainWindow):
         self.importedProgressLayout.addWidget(self.videoCropOffsetY_value, 7, 2)
         self.importedProgressLayout.addWidget(self.videoCropOffsetY_slider, 7, 3, 1, 2)
 
-        # Ligne 8 : sauvegarde/restauration de tous les réglages utiles.
-        self.importedProgressLayout.addWidget(QtWidgets.QLabel("Settings"), 8, 0)
-        self.importedProgressLayout.addWidget(self.saveImportedSettings_btn, 8, 1)
-        self.importedProgressLayout.addWidget(self.loadImportedSettings_btn, 8, 2)
+        self.importedProgressLayout.addWidget(QtWidgets.QLabel("Settings"), 8, 1)
+        self.importedProgressLayout.addWidget(self.saveImportedSettings_btn, 8, 3)
+        self.importedProgressLayout.addWidget(self.loadImportedSettings_btn, 8, 4)
 
         self.importedProgressLayout.setColumnStretch(3, 1)
         self.importedProgressLayout.setColumnStretch(4, 1)
@@ -2035,8 +2064,6 @@ class UIXenopus(QtWidgets.QMainWindow):
             self.openImportedVideo_btn.setMaximumWidth(120)
             self.startImportedVideo_btn.setMaximumWidth(95)
             self.stopImportedVideo_btn.setMaximumWidth(70)
-            self.saveImportedSettings_btn.setMaximumWidth(115)
-            self.loadImportedSettings_btn.setMaximumWidth(115)
         except Exception:
             pass
 
@@ -2049,9 +2076,18 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         self.set_analysis_mode("live", update_combo=True)
 
-        self.d8.raiseDock()
+        # Avec le dock Video player supprimé, video Capture n'est plus dans un
+        # conteneur tabulé. raiseDock() peut donc lever une erreur selon la
+        # version de pyqtgraph. On garde l'appel seulement si possible.
+        try:
+            self.d8.raiseDock()
+        except Exception:
+            pass
 
-        self.d11.raiseDock()
+        try:
+            self.d11.raiseDock()
+        except Exception:
+            pass
 
         try:
             from Imagys_blue.qsshelper import QSSHelper
@@ -2435,7 +2471,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         if getattr(self, "_live_dock_height_cache", None):
             return
 
-        for name, dock in [("d1", self.d1), ("d9", self.d9), ("d11", self.d11)]:
+        for name, dock in [("d1", self.d1), ("d11", self.d11)]:
             try:
                 self._live_dock_height_cache[name] = {
                     "min": dock.minimumHeight(),
@@ -2471,11 +2507,10 @@ class UIXenopus(QtWidgets.QMainWindow):
         """
         self._remember_live_dock_heights()
 
-        # Camera/player compressés : ils n'ont pas besoin d'occuper de hauteur.
+        # Camera compressée en mode Imported video : elle n'a pas besoin d'occuper de hauteur.
         try:
-            self._force_dock_height(self.d9, 0)
             self._force_dock_height(self.d11, 0)
-            self._force_dock_height(self.d15, 235)
+            self._force_dock_height(self.d15, 232)
         except Exception:
             pass
 
@@ -2487,8 +2522,8 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         try:
             self.area.resizeDocks(
-                [self.d1, self.d15, self.d9, self.d11],
-                [self._video_mode_image_height, 235, 1, 1],
+                [self.d1, self.d15, self.d11],
+                [self._video_mode_image_height, 205, 1],
                 "vertical"
             )
         except Exception:
@@ -2506,7 +2541,6 @@ class UIXenopus(QtWidgets.QMainWindow):
         """
         try:
             self._release_dock_height(self.d1)
-            self._release_dock_height(self.d9)
             self._release_dock_height(self.d11)
             self._release_dock_height(self.d15)
         except Exception:
@@ -2514,8 +2548,8 @@ class UIXenopus(QtWidgets.QMainWindow):
 
         try:
             self.area.resizeDocks(
-                [self.d1, self.d9, self.d11, self.d15],
-                [360, 210, 210, 1],
+                [self.d1, self.d11, self.d15],
+                [360, 210, 1],
                 "vertical"
             )
         except Exception:
@@ -2567,6 +2601,9 @@ class UIXenopus(QtWidgets.QMainWindow):
         hide() seul peut laisser un grand espace ou une barre de titre selon
         l'organisation des docks. On combine donc hide/show + hauteur max.
         """
+        if dock is None:
+            return
+
         try:
             if visible:
                 dock.setMaximumHeight(16777215)
@@ -2623,14 +2660,13 @@ class UIXenopus(QtWidgets.QMainWindow):
         if mode == "video":
             # Mode vidéo importée :
             # - barre vidéo visible ;
-            # - docks caméra/player masqués et compressés ;
+            # - dock caméra masqué et compressé ;
             # - on garde Image + ROI + segmentation + optokinetic + plots.
             try:
                 self.importedVideo_toolbar.hide()
             except Exception:
                 pass
 
-            self._set_dock_clean_visible(self.d9, False)
             self._set_dock_clean_visible(self.d11, False)
             self._set_dock_clean_visible(self.d15, True)
 
@@ -2649,7 +2685,7 @@ class UIXenopus(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
-            # Remplir le vide laissé par les docks caméra/player.
+            # Remplir le vide laissé par le dock caméra.
             self._apply_imported_video_layout()
 
             try:
@@ -2668,7 +2704,7 @@ class UIXenopus(QtWidgets.QMainWindow):
         else:
             # Mode temps réel :
             # - barre vidéo importée masquée ;
-            # - docks caméra/player visibles ;
+            # - dock caméra visible ;
             # - aucun accès visuel au mode importé.
             try:
                 self.importedVideo_toolbar.hide()
@@ -2678,7 +2714,6 @@ class UIXenopus(QtWidgets.QMainWindow):
             self._restore_live_layout()
 
             self._set_dock_clean_visible(self.d15, False)
-            self._set_dock_clean_visible(self.d9, True)
             self._set_dock_clean_visible(self.d11, True)
 
             try:
@@ -2968,6 +3003,7 @@ class UIXenopus(QtWidgets.QMainWindow):
             self.load_imported_video_first_frame(self.imported_video_path, keep_crop_values=True)
 
 
+
     def _json_safe_number(self, value):
         """
         Convertit proprement les nombres Qt / NumPy en types JSON standards.
@@ -2995,7 +3031,7 @@ class UIXenopus(QtWidgets.QMainWindow):
     def _read_named_widget_values(self, owner):
         """
         Sauvegarde les valeurs des widgets Qt exposés comme attributs d'un objet.
-        Sert notamment à garder la configuration caméra sans lister chaque champ à la main.
+        Sert à garder la configuration caméra sans devoir lister chaque champ à la main.
         """
         values = {}
 
@@ -3177,6 +3213,18 @@ class UIXenopus(QtWidgets.QMainWindow):
                     except Exception:
                         pass
 
+            # Quand on recharge des settings, les anciennes droites d'axe des yeux
+            # ne doivent pas rester dans le plot. Elles seront recalculées juste après
+            # avec la frame courante et les seuils restaurés.
+            for line in list(getattr(self, "eyeAxeLines", [])):
+                try:
+                    self.videoDisplay_Widget.plotView.removeItem(line)
+                except Exception:
+                    try:
+                        self.videoDisplay_Widget.plotView.scene().removeItem(line)
+                    except Exception:
+                        pass
+
             self.roisEye = []
             self.roisEllipseEye = []
             self.roisEyeLabels = []
@@ -3309,22 +3357,35 @@ class UIXenopus(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-    def _collect_imported_video_settings(self):
+    def _collect_analysis_settings(self):
         """
-        Rassemble les réglages utiles dans un dictionnaire sérialisable en JSON.
+        Rassemble les réglages des deux modes : Real-time camera et Imported video.
+        Le même JSON peut donc restaurer une session live ou une session vidéo importée.
         """
         crop_config = self.get_imported_video_crop_config()
 
         return {
-            "format": "xenopus_imported_video_settings",
-            "version": 1,
+            "format": "xenopus_analysis_settings",
+            "version": 2,
             "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "video": {
+            "analysis_mode": str(getattr(self, "analysis_mode", "live")),
+            "video_state": {
+                "path": getattr(self.video, "path", None),
+                "width": int(getattr(self.video, "width", 0) or 0),
+                "height": int(getattr(self.video, "height", 0) or 0),
+                "fps": float(getattr(self.video, "fps", 0) or 0),
+                "nb_frames": int(getattr(self.video, "nbFrames", 0) or 0),
+                "features_file": getattr(self.video, "featuresFile", None),
+                "pixel_format": getattr(self.video, "pixFormat", None),
+                "grab_frame_rate": self._json_safe_number(getattr(self.video, "grabFrameRate", None)),
+                "offset_x": self._json_safe_number(getattr(self.video, "offsetX", None)),
+                "offset_y": self._json_safe_number(getattr(self.video, "offsetY", None)),
+            },
+            "imported_video": {
                 "path": self.imported_video_path,
                 "raw_width": int(getattr(self, "imported_video_raw_width", 0) or 0),
                 "raw_height": int(getattr(self, "imported_video_raw_height", 0) or 0),
-                "fps": float(getattr(self.video, "fps", 0) or 0),
-                "nb_frames": int(getattr(self.video, "nbFrames", 0) or 0),
+                "total_frames": int(getattr(self, "imported_video_total_frames", 0) or 0),
             },
             "imported_crop": {
                 "enabled": bool(self.videoCropEnable_ckb.isChecked()),
@@ -3364,18 +3425,20 @@ class UIXenopus(QtWidgets.QMainWindow):
             "main_ui": self._read_named_widget_values(self),
         }
 
-    def save_imported_video_settings(self):
+    def save_analysis_settings(self):
         """
-        Enregistre tous les réglages du mode Imported video dans un fichier JSON.
+        Enregistre tous les réglages du mode courant.
+        Fonctionne en Real-time camera et en Imported video.
         """
         try:
-            default_dir = self.result_save_dir or os.path.dirname(self.imported_video_path or "") or QtCore.QDir.homePath()
-            default_name = "xenopus_imported_settings.json"
-            default_path = os.path.join(default_dir, default_name)
+            base_dir = self.result_save_dir or os.path.dirname(self.imported_video_path or "") or os.path.dirname(getattr(self.video, "path", "") or "") or os.path.expanduser("~")
+            mode = str(getattr(self, "analysis_mode", "live"))
+            default_name = "xenopus_{}_settings.json".format("live" if mode == "live" else "imported")
+            default_path = os.path.join(base_dir, default_name)
 
             file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
                 self,
-                "Save imported video settings",
+                "Save Xenopus settings",
                 default_path,
                 "Xenopus settings (*.json);;JSON file (*.json)"
             )
@@ -3386,18 +3449,81 @@ class UIXenopus(QtWidgets.QMainWindow):
             if not file_path.lower().endswith(".json"):
                 file_path += ".json"
 
-            settings = self._collect_imported_video_settings()
+            settings = self._collect_analysis_settings()
 
             with open(file_path, "w", encoding="utf-8") as settings_file:
                 json.dump(settings, settings_file, indent=2, ensure_ascii=False)
 
-            self.importedVideoStatus_label.setText("Settings saved: {}".format(file_path))
+            self._show_settings_status("Settings saved: {}".format(file_path))
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Save settings",
                 "Impossible d'enregistrer les settings : {}".format(exc)
             )
+
+    def _show_settings_status(self, message):
+        try:
+            if getattr(self, "analysis_mode", "live") == "video":
+                self.importedVideoStatus_label.setText(message)
+            else:
+                print(message)
+        except Exception:
+            print(message)
+
+    def refresh_eye_axes_from_current_frame(self):
+        """
+        Recalcule les ellipses et les droites des yeux après un Load settings.
+
+        Les settings sauvegardent les ROIs et les seuils. La droite affichée sur
+        chaque œil est un résultat calculé depuis la frame courante, donc elle
+        doit être reconstruite après la restauration des ROIs.
+        """
+        try:
+            if self.track_checkBox.isChecked():
+                return
+
+            frame = self.get_current_analysis_frame()
+
+            if frame is None:
+                return
+
+            if len(getattr(self, "roisEye", [])) == 0:
+                return
+
+            # update_eyes_overlay utilise l'axe du corps pour l'angle corrigé.
+            # On force donc une mise à jour depuis root/nose si ces points existent.
+            try:
+                if len(self.mark.data) > 0:
+                    root = self.mark.data['pos'][0]
+                    nose = self.mark.data['pos'][1]
+                    varM.bodyAxis_Y = float(nose[1])
+                    varM.bodyAngle = math.atan2(
+                        float(nose[1] - root[1]),
+                        float(nose[0] - root[0])
+                    ) * 180.0 / math.pi
+            except Exception:
+                pass
+
+            threshold_values = [
+                int(self.threshEye1_slider.value()),
+                int(self.threshEye2_slider.value()),
+            ]
+
+            max_count = min(
+                len(getattr(self, "roisEye", [])),
+                len(getattr(self, "eyeAxeLines", [])),
+                2
+            )
+
+            for roi_index in range(max_count):
+                try:
+                    self.update_eyes_overlay(threshold_values[roi_index], roi_index)
+                except Exception as exc:
+                    print("refresh eye axis {} error:".format(roi_index + 1), exc)
+
+        except Exception as exc:
+            print("refresh_eye_axes_from_current_frame error:", exc)
 
     def _apply_imported_video_crop_settings(self, crop_settings):
         if not isinstance(crop_settings, dict):
@@ -3422,20 +3548,61 @@ class UIXenopus(QtWidgets.QMainWindow):
         except Exception as exc:
             print("_apply_imported_video_crop_settings error:", exc)
 
-    def _apply_imported_video_settings(self, settings):
+    def _apply_analysis_settings(self, settings):
         if not isinstance(settings, dict):
             raise ValueError("Invalid settings file.")
 
-        if settings.get("format") != "xenopus_imported_video_settings":
-            raise ValueError("This JSON file is not a Xenopus imported-video settings file.")
+        fmt = settings.get("format")
+        if fmt == "xenopus_imported_video_settings":
+            # Compatibilité avec les anciens JSON créés avant le support du mode live.
+            settings = dict(settings)
+            settings["format"] = "xenopus_analysis_settings"
+            settings["analysis_mode"] = "video"
+            settings["imported_video"] = settings.get("video", {})
+        elif fmt != "xenopus_analysis_settings":
+            raise ValueError("This JSON file is not a Xenopus settings file.")
 
-        # Valeurs simples de l'interface.
+        requested_mode = settings.get("analysis_mode", getattr(self, "analysis_mode", "live"))
+        if requested_mode not in ("live", "video"):
+            requested_mode = getattr(self, "analysis_mode", "live")
+
+        # On restaure d'abord les dimensions connues, utiles pour remettre les ROI même si aucune caméra/vidéo n'est ouverte.
+        video_state = settings.get("video_state", {})
+        try:
+            self.video.width = int(video_state.get("width", getattr(self.video, "width", 0) or 0) or 0)
+            self.video.height = int(video_state.get("height", getattr(self.video, "height", 0) or 0) or 0)
+            self.video.fps = float(video_state.get("fps", getattr(self.video, "fps", 0) or 0) or 0)
+            self.video.nbFrames = int(video_state.get("nb_frames", getattr(self.video, "nbFrames", 0) or 0) or 0)
+            if video_state.get("path"):
+                self.video.path = video_state.get("path")
+            if video_state.get("features_file"):
+                self.video.featuresFile = video_state.get("features_file")
+        except Exception:
+            pass
+
+        # Ne pas relancer set_analysis_mode() si on est déjà dans le bon mode.
+        # Sinon le DockArea recalcule les splitters et peut faire réapparaître
+        # une barre/séparation parasite dans le panneau video Capture après Load settings.
+        current_mode = getattr(self, "analysis_mode", "live")
+        if requested_mode != current_mode:
+            try:
+                self.set_analysis_mode(requested_mode, update_combo=True)
+            except Exception:
+                pass
+        else:
+            try:
+                self._sync_analysis_mode_combo(requested_mode)
+            except Exception:
+                pass
+
         analysis_controls = settings.get("analysis_controls", {})
         output_settings = settings.get("output", {})
 
         try:
             if "mode_index" in analysis_controls:
-                self.manipType_comboBox.setCurrentIndex(int(analysis_controls.get("mode_index", 0)))
+                index = int(analysis_controls.get("mode_index", 0))
+                if 0 <= index < self.manipType_comboBox.count():
+                    self.manipType_comboBox.setCurrentIndex(index)
             self.selectEyes_radioButton.setChecked(bool(analysis_controls.get("selection_eye", self.selectEyes_radioButton.isChecked())))
             self.selectTailRoot_radioButton.setChecked(bool(analysis_controls.get("selection_tail_root", self.selectTailRoot_radioButton.isChecked())))
             self.whiteBgd_radioButton.setChecked(bool(analysis_controls.get("white_background", self.whiteBgd_radioButton.isChecked())))
@@ -3453,15 +3620,15 @@ class UIXenopus(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-        # Config caméra sauvegardée comme valeurs UI génériques.
+        # Config caméra / live : sauvegardée comme valeurs UI génériques.
         self._apply_named_widget_values(getattr(self, "video_capture_widget", None), settings.get("camera_ui", {}))
 
-        # Vidéo : si le fichier existe encore, on le recharge pour que les limites de crop soient correctes.
-        video_settings = settings.get("video", {})
-        video_path = video_settings.get("path")
+        # Vidéo importée : uniquement si le JSON vient d'une session Imported video ou contient un fichier vidéo.
+        imported_settings = settings.get("imported_video", {}) or settings.get("video", {})
+        video_path = imported_settings.get("path")
         loaded_video = False
 
-        if video_path:
+        if requested_mode == "video" and video_path:
             self.imported_video_path = video_path
             self.importedVideoPath_label.setText(video_path)
 
@@ -3470,22 +3637,20 @@ class UIXenopus(QtWidgets.QMainWindow):
             else:
                 self.importedVideoStatus_label.setText("Settings loaded, but video file not found: {}".format(video_path))
 
-        if not loaded_video:
+        if requested_mode == "video" and not loaded_video:
             try:
-                raw_w = int(video_settings.get("raw_width", 0) or 0)
-                raw_h = int(video_settings.get("raw_height", 0) or 0)
+                raw_w = int(imported_settings.get("raw_width", 0) or 0)
+                raw_h = int(imported_settings.get("raw_height", 0) or 0)
                 if raw_w > 0 and raw_h > 0:
                     self.configure_imported_video_crop_controls(raw_w, raw_h)
             except Exception:
                 pass
 
-        # Crop après rechargement vidéo, sinon les sliders peuvent être écrasés par configure_imported_video_crop_controls().
         self._apply_imported_video_crop_settings(settings.get("imported_crop", {}))
 
-        if loaded_video:
+        if requested_mode == "video" and loaded_video:
             self.load_imported_video_first_frame(video_path, keep_crop_values=True)
 
-        # Seuils yeux avant init preview.
         thresholds = settings.get("thresholds", {})
         try:
             self.threshEye1_slider.setValue(int(thresholds.get("eye1", self.threshEye1_slider.value())))
@@ -3503,16 +3668,40 @@ class UIXenopus(QtWidgets.QMainWindow):
         except Exception:
             pass
 
-    def load_imported_video_settings(self):
+        try:
+            self.update_tail_segment_overlay()
+        except Exception:
+            pass
+
+        # Après un Load settings, les ROIs des yeux sont restaurées mais les
+        # droites/ellipses doivent être recalculées depuis la frame courante.
+        self.refresh_eye_axes_from_current_frame()
+        try:
+            QTimer.singleShot(0, self.refresh_eye_axes_from_current_frame)
+            QTimer.singleShot(120, self.refresh_eye_axes_from_current_frame)
+        except Exception:
+            pass
+
+        # En mode Real-time, Load settings ne doit pas modifier la géométrie
+        # des docks. On garantit juste que le dock Imported video reste masqué,
+        # sans appeler _restore_live_layout() ni resizeDocks().
+        if requested_mode == "live":
+            try:
+                self._set_dock_clean_visible(self.d15, False)
+                self._set_dock_clean_visible(self.d11, True)
+            except Exception:
+                pass
+
+    def load_analysis_settings(self):
         """
-        Recharge un fichier JSON de réglages Imported video.
+        Recharge un fichier JSON de réglages. Fonctionne pour live et imported.
         """
         try:
-            default_dir = self.result_save_dir or os.path.dirname(self.imported_video_path or "") or QtCore.QDir.homePath()
+            default_dir = self.result_save_dir or os.path.dirname(self.imported_video_path or "") or os.path.dirname(getattr(self.video, "path", "") or "") or os.path.expanduser("~")
 
             file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self,
-                "Load imported video settings",
+                "Load Xenopus settings",
                 default_dir,
                 "Xenopus settings (*.json);;JSON file (*.json)"
             )
@@ -3523,14 +3712,21 @@ class UIXenopus(QtWidgets.QMainWindow):
             with open(file_path, "r", encoding="utf-8") as settings_file:
                 settings = json.load(settings_file)
 
-            self._apply_imported_video_settings(settings)
-            self.importedVideoStatus_label.setText("Settings loaded: {}".format(file_path))
+            self._apply_analysis_settings(settings)
+            self._show_settings_status("Settings loaded: {}".format(file_path))
         except Exception as exc:
             QtWidgets.QMessageBox.warning(
                 self,
                 "Load settings",
                 "Impossible de charger les settings : {}".format(exc)
             )
+
+    # Compatibilité avec les noms utilisés par les versions précédentes du patch Imported video.
+    def save_imported_video_settings(self):
+        self.save_analysis_settings()
+
+    def load_imported_video_settings(self):
+        self.load_analysis_settings()
 
     def set_imported_review_limits(self, total_frames):
         """
@@ -4292,11 +4488,15 @@ class UIXenopus(QtWidgets.QMainWindow):
     def activate_interface(self,module):
 
         if module=="load video":
-            self.videoPlayer_Widget.playVideo_btn.setEnabled(True)
-            self.videoPlayer_Widget.playVideo_btn.setChecked(False)
-            self.videoPlayer_Widget.timeLine_slider.setEnabled(True)
-            self.videoPlayer_Widget.stepFwdVideo_btn.setEnabled(True)
-            self.videoPlayer_Widget.stepBwdVideo_btn.setEnabled(True)
+            # Ancien Video player supprimé de l'interface.
+            # On garde ce bloc uniquement pour éviter une erreur si un vieux signal l'appelle.
+            if self.videoPlayer_Widget is not None:
+                self.videoPlayer_Widget.playVideo_btn.setEnabled(True)
+                self.videoPlayer_Widget.playVideo_btn.setChecked(False)
+                self.videoPlayer_Widget.timeLine_slider.setEnabled(True)
+                self.videoPlayer_Widget.stepFwdVideo_btn.setEnabled(True)
+                self.videoPlayer_Widget.stepBwdVideo_btn.setEnabled(True)
+            return
 
         elif module=="live video":
             self.video_capture_widget.liveVideo_btn.setEnabled(True)
