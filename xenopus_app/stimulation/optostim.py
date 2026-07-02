@@ -2,7 +2,7 @@
 """
 Created on Thu May 23 16:04:38 2024
 
-@author: Courtand, Kadri 
+@author: Courtand, Kadri
 
 Optokinetic stimulation control panel.
 
