@@ -40,6 +40,12 @@ class Value:
 class UIOptostim(pg.LayoutWidget):
     """Qt control panel for the optokinetic stimulation window."""
 
+    PATTERN_DEFAULTS = {
+        'White Lines': (50, 50, 1, 5, 12),
+        'Green Lines': (50, 50, 1, 5, 12),
+        'Random dots': (20, 20, 1, 5, 12),
+    }
+
     stim_signal = pyqtSignal(int, int, int, int, str, str, str)
     pygame_finished = pyqtSignal()
     cycle_signal = pyqtSignal(int, int, bool)
@@ -49,12 +55,12 @@ class UIOptostim(pg.LayoutWidget):
         super().__init__()
         self.initUI()
 
-        self.stim_width = MPValue('i', 5)
-        self.stim_spacing = MPValue('i', 20)
-        self.stim_speed = MPValue('i', 0)
-        self.stim_switch_frequency = MPValue('i', 2)
+        self.stim_width = MPValue('i', 50)
+        self.stim_spacing = MPValue('i', 50)
+        self.stim_speed = MPValue('i', 1)
+        self.stim_switch_frequency = MPValue('i', 5)
         self.stim_duration_cycle = MPValue('i', 12)
-        self.stim_pattern = Value('Lines')
+        self.stim_pattern = Value('White Lines')
         self.stim_mode = Value('Continue')
         self.stim_direction = MPValue('i', 1)
 
@@ -82,7 +88,7 @@ class UIOptostim(pg.LayoutWidget):
             'Diagonal Grid',
             'Random dots',
         ])
-        self.stim_pattern_input.currentIndexChanged.connect(self.update_values)
+        self.stim_pattern_input.currentTextChanged.connect(self.apply_pattern_defaults)
 
         self.stim_mode_input = QtWidgets.QComboBox(self)
         self.stim_mode_input.addItems(['Continue', 'Alternate'])
@@ -120,22 +126,22 @@ class UIOptostim(pg.LayoutWidget):
 
         self.stim_width_label = QtWidgets.QLabel('Stim Width:')
         self.stim_width_input = QtWidgets.QLineEdit(self)
-        self.stim_width_input.setText('5')
+        self.stim_width_input.setText('50')
         self.stim_width_input.returnPressed.connect(self.update_values)
 
         self.stim_spacing_label = QtWidgets.QLabel('Stim Spacing:')
         self.stim_spacing_input = QtWidgets.QLineEdit(self)
-        self.stim_spacing_input.setText('20')
+        self.stim_spacing_input.setText('50')
         self.stim_spacing_input.returnPressed.connect(self.update_values)
 
         self.stim_speed_label = QtWidgets.QLabel('Stim Speed:')
         self.stim_speed_input = QtWidgets.QLineEdit(self)
-        self.stim_speed_input.setText('2')
+        self.stim_speed_input.setText('1')
         self.stim_speed_input.returnPressed.connect(self.update_values)
 
         self.stim_switch_frequency_label = QtWidgets.QLabel('Switch Frequency (s):')
         self.stim_switch_frequency_input = QtWidgets.QLineEdit(self)
-        self.stim_switch_frequency_input.setText('2')
+        self.stim_switch_frequency_input.setText('5')
         self.stim_switch_frequency_input.returnPressed.connect(self.update_values)
 
         self.stim_duration_label = QtWidgets.QLabel('Duration (cycle):')
@@ -402,6 +408,25 @@ class UIOptostim(pg.LayoutWidget):
             self.stim_direction.value = 1
         else:
             self.stim_direction.value = -1
+
+    def apply_pattern_defaults(self, pattern):
+        """Apply the recommended values when a supported pattern is selected."""
+        defaults = self.PATTERN_DEFAULTS.get(str(pattern))
+
+        if defaults is None:
+            return
+
+        width, spacing, speed, switch_frequency, duration_cycle = defaults
+        self.stim_width_input.setText(str(width))
+        self.stim_spacing_input.setText(str(spacing))
+        self.stim_speed_input.setText(str(speed))
+        self.stim_switch_frequency_input.setText(str(switch_frequency))
+        self.stim_duration_input.setText(str(duration_cycle))
+
+        # During initUI(), shared values do not exist yet. After initialization,
+        # immediately synchronize the new defaults with the running stimulus.
+        if hasattr(self, "stim_width"):
+            self.update_values()
 
     def update_values(self):
         """Read the Qt inputs and store the current stimulation parameters."""

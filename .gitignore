@@ -70,3 +70,6 @@ recordings/
 *.mkv
 *.mpg
 *.mpeg
+
+# Todo file
+.todo.*

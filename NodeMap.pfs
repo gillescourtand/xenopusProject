@@ -4,15 +4,15 @@
 ExposureAuto	Off
 BalanceWhiteAuto	Off
 GainAuto	Off
-Width	1312
-Height	644
+Width	1184
+Height	428
 OffsetX	448
-OffsetY	246
+OffsetY	354
 CenterX	0
 CenterY	0
 ReverseX	0
 ReverseY	0
-PixelFormat	Mono8
+PixelFormat	BGR8
 TestImageSelector	Off
 Gain	{GainSelector=All}	0.00000
 GainSelector	All
@@ -52,8 +52,9 @@ ColorTransformationValue	{ColorTransformationSelector=RGBtoRGB	ColorTransformati
 ColorTransformationValue	{ColorTransformationSelector=RGBtoRGB	ColorTransformationValueSelector=Gain22}	1.75000
 ColorTransformationSelector	RGBtoRGB
 ColorTransformationValueSelector	Gain00
+DemosaicingMode	Simple
 ExposureMode	Timed
-ExposureTime	5000.0
+ExposureTime	4000.0
 SensorReadoutMode	Fast
 AcquisitionBurstFrameCount	1
 TriggerMode	{TriggerSelector=FrameBurstStart}	Off
@@ -67,7 +68,7 @@ TriggerActivation	{TriggerSelector=FrameStart}	RisingEdge
 TriggerSelector	FrameStart
 TriggerDelay	0
 AcquisitionFrameRateEnable	1
-AcquisitionFrameRate	222.22222
+AcquisitionFrameRate	200.00000
 DeviceLinkThroughputLimitMode	{DeviceLinkSelector=0}	On
 DeviceLinkSelector	0
 DeviceLinkThroughputLimit	{DeviceLinkSelector=0}	300000000
