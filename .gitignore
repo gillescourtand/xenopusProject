@@ -1,0 +1,75 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VS Code cache
+.vscode/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Installer / packaging
+build/
+dist/
+*.spec
+
+# PyInstaller temporary files
+*.manifest
+*.toc
+
+# Logs
+*.log
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Spyder
+.spyderproject
+.spyproject
+.spyder-py3/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project runtime outputs
+*.csv
+*.wkp
+*.json.bak
+
+# Optional local folders
+results/
+output/
+outputs/
+captures/
+recordings/
+
+# Large video files
+*.avi
+*.mp4
+*.mov
+*.mkv
+*.mpg
+*.mpeg
+
+# Todo file
+.todo.*

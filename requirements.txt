@@ -1,0 +1,9 @@
+PyQt5==5.15.11
+pyqtgraph==0.14.0
+numpy==2.4.6
+opencv-python==4.13.0.92
+psutil==5.9.7
+pypylon==26.5.0
+pylibftdi==0.24.0
+pygame==2.5.2
+keyboard==0.13.5
