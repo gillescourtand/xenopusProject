@@ -1,4 +1,7 @@
 # xenopus
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21164893.svg)](https://doi.org/10.5281/zenodo.21164893)
+
 automatic high speed video-tracking of body parts (eyes, tail segments, limb…) in aquatic small vertebrate such as larval frog [(Bacqué-Cazenave et al. Nat Commun 13, 2957 (2022)](https://doi.org/10.1038/s41467-022-30636-6)
 
 Xenopus is a Python application for analyzing eye and tail movements in *Xenopus laevis* larvae.
